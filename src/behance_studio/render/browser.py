@@ -222,21 +222,34 @@ class BrowserSession:
         return page.evaluate(LAYOUT_CHECK_JS)
 
     @staticmethod
+    def _fix_height(path: Path, expected: int) -> Path:
+        """Chromium may return ±1px for fractional clips; normalise exactly."""
+        with Image.open(path) as img:
+            if img.height == expected:
+                return path
+            fixed = Image.new("RGB", (img.width, expected), img.getpixel((0, img.height - 1))[:3] if img.height else (255, 255, 255))
+            fixed.paste(img.convert("RGB").crop((0, 0, img.width, min(img.height, expected))), (0, 0))
+        fixed.save(path, "PNG")
+        return path
+
+    @staticmethod
     def capture(page, y: float, height: float, width: float, scale: float, out_path: Path, tile_px: int = 4000) -> Path:
         """Capture a vertical region (CSS px) to PNG, tiling tall regions."""
-        tile_css = max(200.0, tile_px / scale)
-        if height <= tile_css:
-            page.screenshot(path=str(out_path), clip={"x": 0, "y": y, "width": width, "height": height}, full_page=True, type="png", animations="disabled")
-            return out_path
+        total_px = int(round(height * scale))
+        y_px = int(round(y * scale))
+        if total_px <= tile_px:
+            page.screenshot(path=str(out_path), clip={"x": 0, "y": y_px / scale, "width": width, "height": total_px / scale}, full_page=True, type="png", animations="disabled")
+            return BrowserSession._fix_height(out_path, total_px)
         tiles = []
-        offset = 0.0
+        done = 0
         index = 0
-        while offset < height - 0.01:
-            h = min(tile_css, height - offset)
+        while done < total_px:
+            h = min(tile_px, total_px - done)
             tile_path = out_path.with_name(f"{out_path.stem}.tile{index}.png")
-            page.screenshot(path=str(tile_path), clip={"x": 0, "y": y + offset, "width": width, "height": h}, full_page=True, type="png", animations="disabled")
+            page.screenshot(path=str(tile_path), clip={"x": 0, "y": (y_px + done) / scale, "width": width, "height": h / scale}, full_page=True, type="png", animations="disabled")
+            BrowserSession._fix_height(tile_path, h)
             tiles.append(tile_path)
-            offset += h
+            done += h
             index += 1
         images = [Image.open(t) for t in tiles]
         total_h = sum(i.height for i in images)

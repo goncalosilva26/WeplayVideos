@@ -153,6 +153,7 @@ class CinematicFamily(LayoutFamily):
         anchor, x, top, width, total = found
         align = "center" if anchor == "center" else ("right" if anchor.endswith("right") else "left")
         st = self.st_title(comp, size)
+        label_h = comp.px(34) if label else 0
         rect = (x, top, width, total)
         color, need_scrim = comp.overlay_style(img, rect, self.fg, comp.palette.ink)
         if color != self.fg:

@@ -325,6 +325,34 @@ class Composer:
             return 0.0
         return (iw * ih) / (w * h)
 
+    def quiet_corner(self, image_block: Block, w: float, h: float, inset: float) -> tuple[float, float]:
+        """Top-left position for a w×h label in the image corner with the
+        flattest content (least likely to hide important detail)."""
+        import numpy as np
+
+        asset = self.asset(image_block.asset_id or "")
+        grid = np.asarray((asset.analysis or {}).get("luminance_grid") or [[0.5] * 8] * 8, dtype=float) if asset else np.full((8, 8), 0.5)
+        vis = image_block.meta.get("visible", (0, 0, 1, 1))
+        corners = {
+            "tl": (image_block.x + inset, image_block.y + inset),
+            "tr": (image_block.right - inset - w, image_block.y + inset),
+            "bl": (image_block.x + inset, image_block.bottom - inset - h),
+            "br": (image_block.right - inset - w, image_block.bottom - inset - h),
+        }
+        best, best_score = corners["tl"], float("inf")
+        for name, (x, y) in corners.items():
+            fx0 = vis[0] + (x - image_block.x) / image_block.w * (vis[2] - vis[0])
+            fx1 = vis[0] + (x + w - image_block.x) / image_block.w * (vis[2] - vis[0])
+            fy0 = vis[1] + (y - image_block.y) / image_block.h * (vis[3] - vis[1])
+            fy1 = vis[1] + (y + h - image_block.y) / image_block.h * (vis[3] - vis[1])
+            gx0, gx1 = int(max(0, min(7, fx0 * 8))), int(max(1, min(8, math.ceil(fx1 * 8))))
+            gy0, gy1 = int(max(0, min(7, fy0 * 8))), int(max(1, min(8, math.ceil(fy1 * 8))))
+            region = grid[gy0:gy1, gx0:gx1]
+            score = float(region.std()) + self.subject_overlap(image_block, (x, y, w, h)) * 2
+            if score < best_score:
+                best, best_score = (x, y), score
+        return best
+
     # ---------------------------------------------------------- arrangements
     def row(self, ids: list[str], x: float, y: float, width: float, gap: float, max_h: float | None = None, align: str = "center", radius: float = 0.0) -> tuple[list[Block], float]:
         """One justified row at the images' natural proportions."""

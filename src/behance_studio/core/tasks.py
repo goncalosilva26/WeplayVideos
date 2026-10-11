@@ -78,7 +78,7 @@ class StageTracker:
         overall = None
         if fraction is not None:
             fraction = max(0.0, min(1.0, fraction))
-            overall = (done + self._weight(name) * fraction) / total
+            overall = round((done + self._weight(name) * fraction) / total, 6)
         self.callback(
             ProgressEvent(
                 stage=name,

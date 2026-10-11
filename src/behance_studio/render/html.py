@@ -273,3 +273,41 @@ def render_html(presentation: Presentation, options: RenderOptions) -> str:
         f"<style>\n{chr(10).join(css)}\n</style>\n{options.extra_head}</head>\n<body>\n"
         f'<main class="bs-deck">\n{body}\n</main>\n{scripts}{options.extra_body}\n</body>\n</html>\n'
     )
+
+
+def render_pages_html(presentation: Presentation, pages: list, options: RenderOptions, margin: float = 0.0) -> str:
+    """Print document: each page has its own named @page size; sections are
+    sliced/scaled into pages (see ``export.paginate``)."""
+    families = sorted({b.style.family for p in pages for sl in p.slices for b in sl.section.blocks if b.style} | set(presentation.fonts))
+    css = [
+        f":root{{--w:{presentation.width}px;--page:{presentation.page_background}}}",
+        font_face_css(families, options.font_url),
+        BASE_CSS,
+        ".pg{position:relative;overflow:hidden;break-after:page;break-inside:avoid}",
+        ".pg:last-child{break-after:auto}",
+        # inline-block slices are monolithic for print fragmentation: clipped
+        # overflow can never spill onto an extra page.
+        ".row{display:block;line-height:0;font-size:0;text-align:center}",
+        ".slice{position:relative;overflow:hidden;display:inline-block;vertical-align:top;text-align:left}",
+        "html,body{background:transparent}",
+    ]
+    body = []
+    for i, page in enumerate(pages):
+        css.append(f"@page p{i}{{size:{_num(page.width)}px {_num(page.height)}px;margin:0}}")
+        # The box is a hair shorter than the page: sub-pixel rounding must
+        # never spill into an extra (blank, default-sized) page.
+        css.append(f".pg{i}{{page:p{i};width:{_num(page.width)}px;height:{_num(page.height - 1.0)}px;background:{page.background};padding:{_num(margin)}px {_num(margin)}px}}")
+        parts = []
+        for sl in page.slices:
+            sec_html = render_section(sl.section, options)
+            parts.append(
+                f'<div class="row"><div class="slice" style="height:{_num(sl.height)}px;width:{_num(presentation.width * sl.scale)}px">'
+                f'<div style="zoom:{sl.scale:.6f};margin-top:{_num(-sl.y0)}px;width:{presentation.width}px">{sec_html}</div></div></div>'
+            )
+        body.append(f'<div class="pg pg{i}">{"".join(parts)}</div>')
+    title = html.escape(options.title or presentation.title or "Presentation")
+    lang = presentation.language if presentation.language in ("en", "pt") else "en"
+    return (
+        f'<!DOCTYPE html>\n<html lang="{lang}">\n<head>\n<meta charset="utf-8">\n<title>{title}</title>\n'
+        f"<style>\n{chr(10).join(css)}\n</style>\n</head>\n<body>\n{''.join(body)}\n</body>\n</html>\n"
+    )

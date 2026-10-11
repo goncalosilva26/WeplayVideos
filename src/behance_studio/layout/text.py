@@ -34,11 +34,18 @@ def _font_cache() -> dict:
 
 
 def load_font(family: str, weight: int, size: float, italic: bool = False, stretch: int = 100) -> ImageFont.FreeTypeFont:
-    """FreeType font configured like the CSS renderer (weight, opsz, width)."""
+    """FreeType font configured like the CSS renderer (weight, opsz, width),
+    loaded at 4x the CSS size for sub-pixel measurement precision."""
+    return font_at(family, weight, max(1, int(round(size * 4))), size, italic, stretch)
+
+
+def font_at(family: str, weight: int, px: int, css_size: float, italic: bool = False, stretch: int = 100) -> ImageFont.FreeTypeFont:
+    """FreeType font at ``px`` pixels whose optical size matches ``css_size``."""
     fam = get_font(family)
     weight = fam.clamp_weight(weight)
-    px = max(1, int(round(size * 4)))  # measure at 4x for sub-pixel precision
-    key = (fam.name, weight, px, italic, stretch)
+    px = max(1, int(px))
+    size = css_size
+    key = (fam.name, weight, px, italic, stretch, round(css_size, 1))
     cache = _font_cache()
     font = cache.get(key)
     if font is not None:

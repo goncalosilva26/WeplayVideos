@@ -92,13 +92,17 @@ class PostersFamily(LayoutFamily):
     def st_body(self, comp, color, size=19) -> TextStyle:
         return TextStyle(self.ts.text, comp.px(size), get_font(self.ts.text).clamp_weight(500), 1.5, 0.0, color)
 
-    def pill(self, comp: Composer, sb: SectionBuilder, text: str, x: float, y: float, fill: str, fg: str, size: float = 13, overlay: bool = False, align: str = "left") -> Block | None:
+    def pill(self, comp: Composer, sb: SectionBuilder, text: str, x: float, y: float, fill: str, fg: str, size: float = 13, overlay: bool = False, align: str = "left", on_image: Block | None = None) -> Block | None:
         st = self.st_label(comp, fg, size)
         line = T.transform(text, st)
         w = T.line_width(line, st) / T.SAFETY + comp.px(36) + 2
         h = st.line_px + comp.px(18)
         if align == "right":
             x = x - w
+        if on_image is not None:
+            if w > on_image.w - comp.px(40):
+                return None
+            x, y = comp.quiet_corner(on_image, w, h, comp.px(20))
         shape = Block(kind="shape", x=x, y=y, w=w, h=h, fill=fill, radius=h / 2, z=4 if overlay else 2, overlay=overlay, decorative=not overlay)
         label = comp.text(text, x + comp.px(18), y + comp.px(9), w - comp.px(36), st, "label")
         if label:
@@ -199,7 +203,7 @@ class PostersFamily(LayoutFamily):
                 sb.add(b)
                 if b is not None:
                     if sp.subtitle and self.v["stickers"]:
-                        self.pill(comp, sb, sp.subtitle, b.x + comp.px(28), b.y + comp.px(28), fg, bg, size=16, overlay=True)
+                        self.pill(comp, sb, sp.subtitle, b.x, b.y, fg, bg, size=16, overlay=True, on_image=b)
                     y = b.bottom
                     if sp.subtitle and not self.v["stickers"]:
                         s2 = comp.text(sp.subtitle, self.M, y + comp.px(28), self.CW, self.st_label(comp, fg, 20), "subtitle", editable="subtitle")
@@ -295,7 +299,7 @@ class PostersFamily(LayoutFamily):
             first = media_blocks[0]
             cap = sp.captions.get(first.asset_id or "") or f"{state.content_index + 1:02d}/{len(ids):02d}"
             if first.w > comp.px(260) and first.h > comp.px(120):
-                self.pill(comp, sb, cap, first.x + comp.px(20), first.y + comp.px(20), fg if fg != bg else comp.palette.ink, bg, size=12, overlay=True)
+                self.pill(comp, sb, cap, first.x, first.y, fg if fg != bg else comp.palette.ink, bg, size=12, overlay=True, on_image=first)
         sb.y = y
         return sb.finish(comp.px(88))
 
