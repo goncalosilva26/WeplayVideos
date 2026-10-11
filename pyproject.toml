@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "behance-studio"
+version = "0.1.0"
+description = "AI-assisted professional portfolio presentation generator for Windows"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+dependencies = [
+    "PySide6>=6.8",
+    "Pillow>=11.0",
+    "numpy>=2.1",
+    "opencv-python-headless>=4.10",
+    "playwright>=1.48",
+    "imageio-ffmpeg>=0.5",
+    "keyring>=25.0",
+    "Send2Trash>=1.8",
+    "pypdf>=5.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+behance-studio = "behance_studio.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+behance_studio = ["resources/**/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = [
+    "browser: tests that need a Chromium-based browser for rendering",
+    "gui: tests that create Qt widgets",
+    "slow: long-running end-to-end tests",
+]
