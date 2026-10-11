@@ -324,6 +324,11 @@ def generate(
 
     # 10 ── present
     tracker.start("present", STAGE_LABELS["present"])
+    if ai_service is not None and request.use_ai:
+        result.notes.extend(getattr(ai_service, "log", []))
+        status = getattr(ai_service, "status", None)
+        if callable(status) and not result.ai_used:
+            result.notes.append(status())
     result.elapsed = time.monotonic() - started
     tracker.update(1.0, f"{len(result.versions)} proposal(s) ready")
     log.info("Generated %d proposal(s) for %s in %.1fs (%d failure(s))", len(result.versions), project.name, result.elapsed, len(result.failures))

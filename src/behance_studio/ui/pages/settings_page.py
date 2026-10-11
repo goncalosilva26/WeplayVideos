@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 
 from behance_studio import APP_NAME, __version__
 from behance_studio.ai.credentials import get_api_key, set_api_key, storage_description
+from behance_studio.ai.providers import DEFAULT_MODELS, DEFAULT_URLS
 from behance_studio.core.fsutil import dir_size, human_size
 from behance_studio.core.logging_setup import log_file_path
 from behance_studio.core.paths import logs_dir
@@ -40,8 +41,6 @@ PROVIDERS = [
     ("anthropic", "Anthropic API (Claude)"),
     ("local", "Local model (Ollama / LM Studio, OpenAI-compatible)"),
 ]
-DEFAULT_MODELS = {"openai": "gpt-4.1-mini", "anthropic": "claude-sonnet-5-5", "local": "llava"}
-DEFAULT_URLS = {"openai": "https://api.openai.com/v1", "anthropic": "https://api.anthropic.com", "local": "http://localhost:11434/v1"}
 
 
 class SettingsPage(QWidget):
@@ -160,7 +159,7 @@ class SettingsPage(QWidget):
         self.ai_brief.setChecked(s.ai.use_for_brief)
         for cb in (self.ai_classify, self.ai_copy, self.ai_brief):
             form.addRow("", cb)
-        self.project_consent = QCheckBox("Allow AI image analysis for the current project")
+        self.project_consent = QCheckBox("Allow AI assistance for the current project (sends its brief and, if allowed above, small previews)")
         form.addRow("", self.project_consent)
         test_row = QHBoxLayout()
         test_row.addWidget(button("Test connection", "cpu", on_click=self._test_ai))
@@ -251,17 +250,23 @@ class SettingsPage(QWidget):
 
     def _test_ai(self) -> None:
         self.save(quiet=True)
-        try:
-            from behance_studio.ai.providers import create_provider
+        from behance_studio.ai.providers import create_provider
 
+        try:
             provider = create_provider(self.state.settings)
-            if provider is None:
-                info(self, "AI disabled", "Choose a provider first.")
-                return
-            message = provider.test_connection()
-            info(self, "Connection works", message)
         except Exception as exc:  # noqa: BLE001
-            show_error(self, exc, "Connection failed")
+            show_error(self, exc, "AI is not ready")
+            return
+        if provider is None:
+            info(self, "AI is off", "Choose a provider first.")
+            return
+        self.toast("Testing the connection…")
+        self.state.runner.start(
+            lambda token, progress: provider.test_connection(),
+            "ai-test",
+            on_done=lambda message: info(self, "Connection works", message),
+            on_error=lambda exc: show_error(self, exc, "Connection failed"),
+        )
 
     def _clear_cache(self) -> None:
         project = self.state.project

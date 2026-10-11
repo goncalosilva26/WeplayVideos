@@ -412,7 +412,7 @@ class WorkspacePage(QWidget):
         lay.addWidget(section_title("Analysis"))
         provider = self.state.settings.ai.provider
         ai_text = "Offline heuristics only (no AI provider configured)." if provider in ("", "none") else (
-            f"AI provider: {provider}. " + ("Image analysis allowed for this project." if project.config.ai_consent else "Images are not sent until you allow it for this project.")
+            f"AI provider: {provider}. " + ("This project allows AI assistance." if project.config.ai_consent else "Nothing from this project is sent until you allow it in Settings.")
         )
         lay.addWidget(label(ai_text, "Faint", wrap=True))
         lay.addStretch(1)

@@ -221,6 +221,14 @@ def cmd_doctor(args) -> int:
     browser = find_browser(get_settings_store().settings.browser_path)
     print(f"Browser     {browser or 'NOT FOUND — exports and previews will not work'}")
     print(f"Fonts       {len(list(FONTS_DIR.glob('*.ttf')))} bundled")
+    ai = get_settings_store().settings.ai
+    if ai.provider in ("", "none"):
+        print("AI          off (offline heuristics)")
+    else:
+        from behance_studio.ai.credentials import has_api_key
+
+        key = "key stored" if has_api_key(ai.provider) else "no key"
+        print(f"AI          {ai.provider} · {ai.model or 'default model'} · {key}")
     print(f"Data        {user_data_dir()}")
     print(f"Logs        {logs_dir()}")
     return 0 if browser else 1
