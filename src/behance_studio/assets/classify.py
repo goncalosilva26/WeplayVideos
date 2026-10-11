@@ -36,6 +36,7 @@ KEYWORDS: dict[str, list[str]] = {
     "outdoor": ["outdoor", "billboard", "billboards", "ooh", "mupi", "mupis", "busstop", "abribus", "signage", "sinaletica", "facade", "fachada", "storefront", "montra", "banner", "banners", "totem", "street"],
     "social": ["social", "socialmedia", "instagram", "insta", "ig", "post", "posts", "story", "stories", "feed", "facebook", "linkedin", "tiktok", "reel", "reels", "carousel", "carrossel", "redes", "redessociais"],
     "stationery": ["stationery", "papelaria", "businesscard", "businesscards", "card", "cards", "cartao", "cartoes", "letterhead", "envelope", "menu", "ementa", "invoice", "fatura", "notebook", "caderno"],
+    "editorial": ["editorial", "magazine", "revista", "book", "livro", "spread", "spreads", "catalogue", "catalog", "catalogo", "brochure", "brochura", "zine", "publication", "publicacao", "annualreport"],
     "mockup": ["mockup", "mockups", "mock", "application", "applications", "aplicacao", "aplicacoes", "merch", "merchandise", "tshirt", "apron", "avental", "uniform", "uniforme", "tote", "totebag", "mug", "caneca"],
     "website": ["website", "web", "site", "landing", "landingpage", "homepage", "desktop", "webpage", "webdesign"],
     "mobile": ["mobile", "app", "iphone", "android", "ios", "phone", "telemovel", "smartphone"],

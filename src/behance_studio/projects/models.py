@@ -32,6 +32,7 @@ ASSET_KINDS: dict[str, str] = {
     "outdoor": "Outdoor advertising",
     "social": "Social media",
     "stationery": "Stationery / collateral",
+    "editorial": "Editorial / publication",
     "mockup": "Mockup / application",
     "website": "Website",
     "mobile": "Mobile app",
