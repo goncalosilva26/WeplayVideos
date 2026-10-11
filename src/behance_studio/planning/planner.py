@@ -666,11 +666,22 @@ def plan_automatic(ctx: PlanningContext, prefs: PlanPreferences, seed: int) -> P
     )
 
 
+def assign_stable_ids(plan: PresentationPlan) -> PresentationPlan:
+    """Content-derived section ids: re-planning the same material yields the
+    same ids, so seeded compositions are exactly reproducible."""
+    import hashlib
+
+    for index, sp in enumerate(plan.sections):
+        key = f"{index}:{sp.type}:{sp.title}:{','.join(sp.asset_ids)}"
+        sp.id = hashlib.sha1(key.encode("utf-8")).hexdigest()[:12]
+    return plan
+
+
 def plan_presentation(ctx: PlanningContext, prefs: PlanPreferences | None = None, seed: int = 0) -> PresentationPlan:
     prefs = prefs or PlanPreferences()
     if ctx.directives.script_locked:
-        return plan_from_script(ctx, prefs, seed)
-    return plan_automatic(ctx, prefs, seed)
+        return assign_stable_ids(plan_from_script(ctx, prefs, seed))
+    return assign_stable_ids(plan_automatic(ctx, prefs, seed))
 
 
 def describe_plan(plan: PresentationPlan) -> str:

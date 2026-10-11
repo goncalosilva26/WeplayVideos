@@ -341,3 +341,50 @@ def signature(presentation: Presentation) -> dict[str, float]:
 def signature_distance(a: dict[str, float], b: dict[str, float]) -> float:
     keys = set(a) | set(b)
     return math.sqrt(sum((a.get(k, 0) - b.get(k, 0)) ** 2 for k in keys))
+
+
+def _iou(a: Block, b: Block) -> float:
+    inter = _intersection(a, b)
+    union = a.w * a.h + b.w * b.h - inter
+    return inter / union if union > 0 else 0.0
+
+
+def layout_distance(a: Presentation, b: Presentation) -> float:
+    """0 = identical composition, 1 = completely different.
+
+    A pure colour variation of the same layout can score at most 0.2 (the
+    background term), so values above 0.25 imply structural differences.
+    Compares sections that show the same plan content: where the same assets
+    are placed (IoU of their frames), section heights, backgrounds and the
+    largest text size. Colour-only variations score low by construction.
+    """
+    by_plan_b = {s.plan_id: s for s in b.sections if s.plan_id}
+    diffs: list[float] = []
+    for sa in a.sections:
+        sb_ = by_plan_b.get(sa.plan_id)
+        if sb_ is None:
+            continue
+        media_a = {x.asset_id: x for x in sa.blocks if x.asset_id}
+        media_b = {x.asset_id: x for x in sb_.blocks if x.asset_id}
+        common = set(media_a) & set(media_b)
+        geo = 1 - (sum(_iou(media_a[k], media_b[k]) for k in common) / len(common)) if common else 0.5
+        height = abs(sa.height - sb_.height) / max(sa.height, sb_.height, 1)
+        bg = min(1.0, C.delta_e(sa.background, sb_.background) / 60) if C.parse_hex(sa.background) and C.parse_hex(sb_.background) else 0.5
+        ta = max((x.style.size for x in sa.blocks if x.style), default=0)
+        tb = max((x.style.size for x in sb_.blocks if x.style), default=0)
+        text = abs(ta - tb) / max(ta, tb, 1)
+
+        def decor(sec: Section) -> float:
+            area = sum(x.w * x.h for x in sec.blocks if x.kind == "shape" and x.fill and not str(x.fill).startswith(("linear", "radial", "transparent")))
+            return min(1.0, area / max(1.0, a.width * sec.height))
+
+        deco = abs(decor(sa) - decor(sb_))
+
+        def title_pos(sec: Section) -> tuple[float, float]:
+            t = next((x for x in sec.blocks if x.role in ("title", "display")), None)
+            return ((t.x + t.w / 2) / a.width, (t.y + t.h / 2) / max(1.0, sec.height)) if t else (0.5, 0.5)
+
+        pa, pb = title_pos(sa), title_pos(sb_)
+        title = min(1.0, math.dist(pa, pb) * 2)
+        diffs.append(0.3 * geo + 0.1 * height + 0.2 * bg + 0.15 * text + 0.15 * deco + 0.1 * title)
+    return sum(diffs) / len(diffs) if diffs else 1.0
