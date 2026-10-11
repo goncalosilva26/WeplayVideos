@@ -13,6 +13,21 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "tools"))
 sys.path.insert(0, str(ROOT / "tests"))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+if hasattr(os, "geteuid") and os.geteuid() == 0:
+    os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")  # Chromium refuses to sandbox as root
+
+_APP = None
+
+
+def pytest_configure(config):
+    """Create one full QApplication for the session (widgets, SVG and WebEngine)."""
+    global _APP
+    try:
+        from behance_studio.ui.app import create_application
+
+        _APP = create_application(["pytest"])
+    except Exception:  # noqa: BLE001 - GUI stack unavailable; headless tests still run
+        _APP = None
 
 
 @pytest.fixture(autouse=True)
@@ -47,5 +62,7 @@ def demo_assets_dir(tmp_path_factory):
 def qapp():
     from PySide6.QtWidgets import QApplication
 
-    app = QApplication.instance() or QApplication(["pytest"])
+    app = QApplication.instance()
+    if not isinstance(app, QApplication):
+        pytest.skip("Qt widgets are not available in this environment")
     yield app
