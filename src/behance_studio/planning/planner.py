@@ -47,6 +47,7 @@ class PlanPreferences:
     merge_small: int = 1  # sections with fewer assets merge into a related one
     split_logo_variations: bool = True
     shuffle: float = 0.0  # 0..1 how freely optional sections may reorder
+    hero_aspect: float | None = None  # frame the family's cover wants to fill
 
 
 IDENTITY_STORY = [
@@ -560,12 +561,22 @@ def _auto_sections(
     return sections
 
 
+def _useful_captions(captions: dict[str, str], title: str) -> dict[str, str]:
+    """Keep generated captions only when they tell items apart."""
+    t = title.casefold()
+    kept = {k: v for k, v in captions.items() if v.casefold() not in t and t not in v.casefold()}
+    if len(set(kept.values())) < 2:
+        return {}
+    return kept
+
+
 def _section(ctx: PlanningContext, type_id: str, assets: list[AssetRecord], writer: Copywriter) -> SectionPlan:
+    title = writer.section_title(type_id)
     plan = SectionPlan(
         type=type_id,
-        title=writer.section_title(type_id),
+        title=title,
         asset_ids=[a.id for a in assets],
-        captions=_captions(ctx, assets, writer),
+        captions=_useful_captions(_captions(ctx, assets, writer), title),
     )
     plan.importance = min(1.0, 0.4 + 0.08 * len(assets))
     return plan
@@ -577,6 +588,11 @@ def plan_automatic(ctx: PlanningContext, prefs: PlanPreferences, seed: int) -> P
     usable = usable_assets(ctx)
     brief = ctx.directives.brief
     heroes = hero_candidates(usable)
+    if prefs.hero_aspect and heroes:
+        from behance_studio.layout.fitting import can_cover
+
+        fits = [h for h in heroes if can_cover(h, prefs.hero_aspect)]
+        heroes = fits + [h for h in heroes if h not in fits]
     hero = heroes[prefs.hero_rank % len(heroes)] if heroes else None
     logo = _best_logo(usable)
     # The hero opens the cover and is not repeated in the body sections.
