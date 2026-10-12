@@ -18,6 +18,18 @@ FONTS_DIR = RESOURCES_DIR / "fonts"
 ICONS_DIR = RESOURCES_DIR / "icons"
 
 
+def is_frozen() -> bool:
+    """True inside the packaged Windows build (PyInstaller)."""
+    return bool(getattr(sys, "frozen", False))
+
+
+def tools_dir() -> Path:
+    """Folder holding the bundled helper scripts (demo asset generator)."""
+    if is_frozen():
+        return Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent)) / "tools"
+    return PACKAGE_DIR.parent.parent / "tools"
+
+
 def _home_override() -> Path | None:
     value = os.environ.get("BEHANCE_STUDIO_HOME")
     return Path(value).expanduser().resolve() if value else None

@@ -72,8 +72,9 @@ class Actions(QObject):
             self.new_project([folder], name=Path(folder).name)
 
     def create_demo(self) -> None:
-        tools = Path(__file__).resolve().parents[3] / "tools"
-        sys.path.insert(0, str(tools))
+        from behance_studio.core.paths import tools_dir
+
+        sys.path.insert(0, str(tools_dir()))
         try:
             from make_demo_assets import build_demo_assets
         except ImportError:

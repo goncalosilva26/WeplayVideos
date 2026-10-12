@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "behance-studio"
-version = "0.1.0"
+version = "2.0.0.dev1"
 description = "AI-assisted professional portfolio presentation generator for Windows"
 readme = "README.md"
 requires-python = ">=3.12"

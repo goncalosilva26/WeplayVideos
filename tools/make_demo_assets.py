@@ -21,7 +21,10 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 ROOT = Path(__file__).resolve().parents[1]
-FONTS = ROOT / "src" / "behance_studio" / "resources" / "fonts"
+try:  # the app's bundled fonts (works in the repository and in the packaged build)
+    from behance_studio.core.paths import FONTS_DIR as FONTS
+except ImportError:
+    FONTS = ROOT / "src" / "behance_studio" / "resources" / "fonts"
 
 ESPRESSO = (46, 31, 23)
 BUTTER = (244, 201, 93)

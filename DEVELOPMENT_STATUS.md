@@ -1,6 +1,6 @@
 # Development status
 
-_Last updated: 2026-10-12 · version 2.0.0-dev · branch `claude/behance-studio-windows-app-o0z32d`_
+_Last updated: 2026-10-12 · version 2.0.0.dev1 · branch `claude/behance-studio-windows-app-o0z32d`_
 
 This file is the persistent record of what exists, what was verified and what
 is still open. Update it at every milestone.
@@ -29,7 +29,7 @@ and `docs/samples/v2/` (the five 2.0 concepts, same synthetic fixture).
 | Local vision model (CLIP via ONNX Runtime, GPU) | **Blocked here** — model host (huggingface.co) is not reachable from this environment | — |
 | Generative mockups | **Planned (M4)** — CSS device/frame mockups are done | — |
 | Visual editor overlay on the spec | **Planned (M3)** — inspector editing works on 2.0 proposals | — |
-| Windows installer | **Planned (M5)** | — |
+| Windows distribution: PyInstaller one-folder (`BehanceStudio.exe` + `BehanceStudio-cli.exe`, unused Qt parts filtered), Inno Setup per-user installer (uninstall keeps user data), `build_windows.bat` | **Done — verified on Linux only** (frozen build: doctor, demo generation with rendering, PDF/PNG/HTML export, GUI start); Windows build, installer compilation and code signing not verified | `tests/test_packaging.py`, manual frozen-build run |
 
 **Not available for testing:** the Kanoffe reference page (www.behance.net is
 blocked by this environment's network policy) and the real Butter & Bean
@@ -55,6 +55,7 @@ provider code follows the documented Anthropic Messages API request shape.
 | Windows — start the app | `BehanceStudio.bat` → `.venv\Scripts\pythonw.exe -m behance_studio` with `PYTHONPATH=src` |
 | Windows — with a log console | `BehanceStudio_debug.bat` |
 | Windows — tests | `run_tests.bat` |
+| Windows — portable build + installer | `build_windows.bat` (see `docs/WINDOWS_INSTALLER.md`) |
 | Linux/macOS (development) | `./run.sh setup`, `./run.sh`, `./run.sh test` |
 | CLI | `.venv\Scripts\python -m behance_studio <create|import|generate|list|export|trash|restore|purge|demo|doctor>` |
 

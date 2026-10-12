@@ -196,7 +196,9 @@ def _select_versions_any(project, numbers: list[str]) -> list[str]:
 
 
 def cmd_demo(args) -> int:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
+    from behance_studio.core.paths import tools_dir
+
+    sys.path.insert(0, str(tools_dir()))
     try:
         from make_demo_assets import build_demo_assets
     except ImportError:

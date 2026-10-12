@@ -69,6 +69,7 @@ On Linux/macOS (development only): `./run.sh setup`, `./run.sh test`, `./run.sh`
 ## Documentation
 
 * [User guide](docs/USER_GUIDE.md) — workflow, brief and script formats, editing, exporting
+* [Windows distribution](docs/WINDOWS_INSTALLER.md) — `build_windows.bat`: portable folder + Inno Setup installer
 * [AI providers](docs/AI_PROVIDERS.md) — optional OpenAI-compatible, Anthropic and local models; AI director and critique; privacy, costs and limits
 * [Architecture](docs/ARCHITECTURE.md) — how the pipeline, layout engine and renderer work
 * [Development status](DEVELOPMENT_STATUS.md) — what is complete, partial and pending

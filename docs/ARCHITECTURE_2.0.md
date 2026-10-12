@@ -114,7 +114,7 @@ decision does not close that door.
 | M2 | Local vision model (CLIP via ONNX Runtime, GPU) for genuine offline asset understanding | planned — model download needs network access to the model host |
 | M3 | Visual editor overlay on the spec; workflow UI (Import → Analyse → Generate → Compare → Export) | planned (ZIP import done) |
 | M4 | Optional mockup compositing and image-generation providers | planned |
-| M5 | PyInstaller + Inno Setup installer, update flow | planned |
+| M5 | PyInstaller + Inno Setup installer, update flow | **build scripts done** (verified on Linux; Windows build and update flow not yet) |
 
 The six v1 layout families remain available as "Classic layouts"; nothing
 that works today is removed.
