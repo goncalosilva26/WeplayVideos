@@ -386,7 +386,7 @@ class DropZone(QFrame):
     paths_dropped = Signal(list)
     clicked = Signal()
 
-    def __init__(self, title: str = "Drop files or folders here", subtitle: str = "Images, SVG, GIF, MP4/MOV/WebM, brief.txt and GUIAO_PROJETO.txt", height: int = 150) -> None:
+    def __init__(self, title: str = "Drop files or folders here", subtitle: str = "Folders, ZIP archives, images, SVG, GIF, MP4/MOV/WebM, brief.txt and GUIAO_PROJETO.txt · a \"References\" folder holds inspiration that is never shown", height: int = 150) -> None:
         super().__init__()
         self.setAcceptDrops(True)
         self.setMinimumHeight(height)
