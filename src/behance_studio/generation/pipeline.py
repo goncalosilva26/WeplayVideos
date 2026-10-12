@@ -90,11 +90,14 @@ def _hash(text: str) -> str:
 
 
 def proposal_specs(request: GenerationRequest, allowed: list[str] | None) -> list[ProposalSpec]:
-    families = [f for f in (request.families or available_families()) if f in available_families()]
+    from behance_studio.layout.families import CONCEPT_FAMILIES
+
+    defaults = [f for f in CONCEPT_FAMILIES if f in available_families()] or available_families()
+    families = [f for f in (request.families or defaults) if f in available_families()]
     if allowed:
         families = [f for f in families if f in allowed] or list(allowed)
     if not families:
-        families = available_families()
+        families = defaults
     count = request.count or len(families)
     base = request.seed if request.seed is not None else random.randint(1, 900_000)
     specs = []
@@ -131,9 +134,63 @@ def revise(proposal: ProposalData, assets: dict, max_rounds: int = 3) -> Proposa
     return proposal
 
 
+FIXABLE_RENDERED = {"rendered_whitespace", "rendered_blank_media", "rendered_contrast", "rendered_off_balance"}
+
+
+def refine_rendered(project, proposals: list[ProposalData], issues: dict[int, list[dict]], staging, assets: dict,
+                    browser_path: str = "", token: CancelToken | None = None, note=lambda m: None, max_rounds: int = 2) -> None:
+    """Targeted correction from rendered measurements (bounded).
+
+    Sections flagged by the rendered QA are recomposed with an alternative
+    module (same content), the proposal is re-rendered, and the change is
+    kept only if the rendered score improves and no geometry error appears.
+    """
+    from behance_studio.qa.rendered import score
+
+    for i, proposal in enumerate(proposals):
+        found = [x for x in issues.get(i, []) if x.get("kind") in FIXABLE_RENDERED]
+        rounds = 0
+        while found and rounds < max_rounds:
+            if token:
+                token.raise_if_cancelled()
+            rounds += 1
+            bad = {x.get("section") for x in found}
+            plan_ids = {s.plan_id for s in proposal.presentation.sections if s.id in bad and s.plan_id}
+            if not plan_ids:
+                break
+            overrides = dict(proposal.spec.overrides)
+            for pid in plan_ids:
+                entry = dict(overrides.get(pid, {}))
+                entry["variant_seed"] = int(entry.get("variant_seed", 0)) + 101
+                overrides[pid] = entry
+            spec = ProposalSpec(proposal.spec.family, proposal.spec.seed, proposal.spec.creativity, proposal.spec.width, overrides)
+            pres = compose(proposal.plan, assets, proposal.direction, spec)
+            report = validate_presentation(pres, assets, proposal.plan)
+            if len(report.errors) > len(proposal.quality.errors):
+                break
+            trial_thumb, trial_strip = staging / f"{i}-trial-thumb.jpg", staging / f"{i}-trial-strip.jpg"
+            trial = render_previews(project, [(pres, trial_thumb, trial_strip)], token, browser_path=browser_path).get(0, [])
+            if score(trial) < score(issues.get(i, [])):
+                proposal.spec, proposal.presentation, proposal.quality = spec, pres, report
+                trial_thumb.replace(staging / f"{i}-thumb.jpg")
+                trial_strip.replace(staging / f"{i}-strip.jpg")
+                issues[i] = trial
+                proposal.notes.append(f"Rendered check: {len(plan_ids)} section(s) recomposed to fix visual issues.")
+                found = [x for x in trial if x.get("kind") in FIXABLE_RENDERED]
+                note(f"Refined {family_info(proposal.spec.family).name}")
+            else:
+                for path in (trial_thumb, trial_strip):
+                    if path.exists():
+                        path.unlink()
+                break
+
+
 def merge_browser_issues(report: QualityReport, browser_issues: list[dict]) -> None:
     for item in browser_issues:
         kind = item.get("kind")
+        if str(kind).startswith("rendered_"):
+            report.issues.append(Issue(item.get("severity", "warning"), kind, item.get("message", ""), item.get("section", ""), item.get("block", "")))
+            continue
         if kind == "text_overflow":
             report.issues.append(Issue("warning", "rendered_overflow", f"Rendered text is {item.get('overflow', 0):.0f}px wider than its box.", item.get("section", ""), item.get("block", "")))
         elif kind == "broken_image":
@@ -288,6 +345,15 @@ def generate(
             log.exception("Preview rendering failed")
             result.notes.append(f"Previews could not be rendered: {getattr(exc, 'message', exc)}")
     tracker.update(1.0, "Previews ready")
+
+    # 7b ── rendered QA: recompose weak sections, re-render, keep improvements
+    if request.render_previews and proposals and browser_issues:
+        try:
+            refine_rendered(project, proposals, browser_issues, staging, by_id, request.browser_path, token, lambda m: tracker.update(1.0, m))
+        except OperationCancelled:
+            raise
+        except Exception as exc:  # noqa: BLE001 - refinement is best effort
+            log.warning("Rendered refinement skipped: %s", exc)
 
     # 8 ── validate
     tracker.start("validate", STAGE_LABELS["validate"])

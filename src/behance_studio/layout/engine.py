@@ -33,6 +33,11 @@ def family_preferences(spec: ProposalSpec) -> PlanPreferences:
 
 
 def build_plan(ctx: PlanningContext, spec: ProposalSpec) -> PresentationPlan:
+    family = get_family(spec.family)
+    planner = getattr(family, "plan", None)
+    if planner is not None:
+        # 2.0 concepts are planned by the Creative Director.
+        return planner(ctx, spec)
     return plan_presentation(ctx, family_preferences(spec), spec.seed)
 
 

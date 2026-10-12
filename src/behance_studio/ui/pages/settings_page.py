@@ -99,15 +99,22 @@ class SettingsPage(QWidget):
             self.width.addItem(w)
         self.width.setCurrentText(str(s.design_width))
         form.addRow("Design width (px)", self.width)
-        fam_row = QHBoxLayout()
+        from PySide6.QtWidgets import QGridLayout
+
+        from behance_studio.layout.families import CONCEPT_FAMILIES
+
         self.families: dict[str, QCheckBox] = {}
-        for fid in available_families():
-            cb = QCheckBox(family_info(fid).name)
-            cb.setChecked(fid in s.families)
-            self.families[fid] = cb
-            fam_row.addWidget(cb)
-        fam_row.addStretch(1)
-        form.addRow("Families", fam_row)
+        for title, group in (("Concepts", [f for f in available_families() if f in CONCEPT_FAMILIES]),
+                             ("Classic layouts", [f for f in available_families() if f not in CONCEPT_FAMILIES])):
+            grid = QGridLayout()
+            grid.setHorizontalSpacing(18)
+            for i, fid in enumerate(group):
+                cb = QCheckBox(family_info(fid).name)
+                cb.setChecked(fid in s.families)
+                cb.setToolTip(family_info(fid).tagline)
+                self.families[fid] = cb
+                grid.addWidget(cb, i // 3, i % 3)
+            form.addRow(title, grid)
         self.reduce_motion = QCheckBox("Reduce motion in previews (no autoplay, no marquees)")
         self.reduce_motion.setChecked(s.reduce_motion)
         form.addRow("", self.reduce_motion)

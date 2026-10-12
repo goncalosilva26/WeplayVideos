@@ -86,7 +86,10 @@ class GalleryPage(QWidget):
         bar = QHBoxLayout()
         bar.setSpacing(6)
         self.chips: dict[str, QPushButton] = {}
-        for key, text in [("all", "All")] + [(f, family_info(f).name) for f in available_families()] + [("favorites", "★ Favourites")]:
+        from behance_studio.layout.families import CONCEPT_FAMILIES
+
+        concept_chips = [(f, family_info(f).name) for f in available_families() if f in CONCEPT_FAMILIES]
+        for key, text in [("all", "All")] + concept_chips + [("classic", "Classic layouts"), ("favorites", "★ Favourites")]:
             chip = QPushButton(text)
             chip.setObjectName("Chip")
             chip.setCheckable(True)
@@ -141,8 +144,12 @@ class GalleryPage(QWidget):
             return
         versions = manager.list()
         self.selected &= {v.id for v in versions}
+        from behance_studio.layout.families import CLASSIC_FAMILIES
+
         if self.family_filter == "favorites":
             versions = [v for v in versions if v.favorite]
+        elif self.family_filter == "classic":
+            versions = [v for v in versions if v.family in CLASSIC_FAMILIES]
         elif self.family_filter != "all":
             versions = [v for v in versions if v.family == self.family_filter]
         order = self.sort.currentIndex()
@@ -156,7 +163,7 @@ class GalleryPage(QWidget):
         if not versions:
             has_assets = bool(self.state.project and self.state.project.list_assets(visual_only=True))
             self.flow.addWidget(EmptyState("layers", "No proposals yet" if self.family_filter == "all" else "Nothing matches this filter",
-                                           "Generate complete presentation proposals from your assets. Each layout family designs the project differently." if has_assets else "Add assets in the Workspace first.",
+                                           "Generate five complete case-study concepts from your assets — each with its own art direction." if has_assets else "Add assets in the Workspace first.",
                                            "Generate Projects" if has_assets else "", (lambda: self.actions.generate()) if has_assets else None))
         preferred = self.state.project.config.preferred_version_id if self.state.project else None
         for v in versions:

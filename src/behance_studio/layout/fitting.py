@@ -71,6 +71,15 @@ def _content_safe(asset: AssetRecord, visible: tuple[float, float, float, float]
     )
 
 
+def _text_safe(asset: AssetRecord, visible: tuple[float, float, float, float]) -> bool:
+    """True when no detected line of typography would be cut by the crop."""
+    tol = 0.004
+    for b in (asset.analysis or {}).get("text_boxes") or []:
+        if b[0] < visible[0] - tol or b[1] < visible[1] - tol or b[2] > visible[2] + tol or b[3] > visible[3] + tol:
+            return False
+    return True
+
+
 def max_crop(asset: AssetRecord) -> float:
     return MAX_CROP.get(asset.effective_kind, 0.08)
 
@@ -92,7 +101,7 @@ def choose_fit(asset: AssetRecord, frame_w: float, frame_h: float, prefer: str =
     top_anchor = kind in TOP_ANCHORED_CROP and image_aspect < frame_aspect
     limit = TOP_ANCHORED_CROP[kind] if top_anchor else max_crop(asset)
     position, visible = cover_region(image_aspect, frame_aspect, focal, top_anchor=top_anchor)
-    if crop <= limit or _content_safe(asset, visible):
+    if _content_safe(asset, visible) or (crop <= limit and _text_safe(asset, visible)):
         return Fit("cover", position, crop, visible)
     return Fit("contain", (50.0, 50.0), 0.0, (0, 0, 1, 1))
 

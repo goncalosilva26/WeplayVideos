@@ -1,10 +1,17 @@
-"""Geometric presentation model.
+"""Geometric presentation model — the Design Spec.
 
-A presentation is a vertical stack of sections; each section has an exact
-height and absolutely positioned blocks (images, video, text, shapes). All
-geometry is computed in Python at the design width, so previews, PDF and
-image exports render the *same* composition, and layout quality can be
-validated deterministically without a browser.
+A presentation is a vertical stack of sections (artboards); each section has
+an exact height and absolutely positioned layers ("blocks": images, video,
+text, shapes). All geometry is computed in Python at the design width, so
+previews, PDF and image exports render the *same* composition, and layout
+quality can be validated deterministically without a browser.
+
+Spec version 2 adds layer transforms (rotation, perspective), masks (clip
+shapes, edge fades), effects (shadows, blend modes, filters), device frames
+(phone, browser, tablet, poster frame), logo tinting for strictly
+single-colour marks, pattern fills and detail zoom. Every v2 field has a
+neutral default, so version-1 documents load unchanged. The JSON schema and
+validator live in :mod:`behance_studio.layout.spec`.
 """
 
 from __future__ import annotations
@@ -83,6 +90,22 @@ class Block:
     decorative: bool = False  # may overlap other blocks (background graphics)
     editable: str | None = None  # plan field this text comes from: title | subtitle | body | eyebrow | caption:<asset>
     meta: dict[str, Any] = field(default_factory=dict)
+    # ---- spec v2: transforms, masks, effects, frames
+    rotate: float = 0.0  # degrees, clockwise, around the layer centre
+    perspective: tuple[float, float] | None = None  # (rotateX, rotateY) degrees: tilted plane
+    clip: str | None = None  # circle | oval | pill | arch | rounded
+    fade: str | None = None  # top | bottom | left | right — soft edge mask
+    shadow: str | None = None  # soft | lifted | float | hard | glow
+    shadow_color: str | None = None
+    blend: str | None = None  # CSS mix-blend-mode (multiply, screen, overlay…)
+    filter: str | None = None  # grayscale | muted | dim
+    tint: str | None = None  # recolour a transparent single-colour mark (CSS mask)
+    zoom: float = 1.0  # detail crop: extra scale around the focal point (cover only)
+    device: str | None = None  # phone | tablet | browser | frame — media shown inside a frame
+    device_color: str | None = None
+    fill_asset: str | None = None  # shape filled with a repeated asset (brand pattern)
+    fill_size: float = 0.0  # tile size in px for fill_asset
+    group: str | None = None  # layers that belong together (editor selection)
 
     @property
     def right(self) -> float:
@@ -92,9 +115,24 @@ class Block:
     def bottom(self) -> float:
         return self.y + self.h
 
+    def bounds(self) -> tuple[float, float, float, float]:
+        """Axis-aligned box (x0, y0, x1, y1) that contains the rotated layer."""
+        if not self.rotate:
+            return self.x, self.y, self.right, self.bottom
+        import math
+
+        a = math.radians(self.rotate)
+        cw, sw = abs(math.cos(a)), abs(math.sin(a))
+        bw = self.w * cw + self.h * sw
+        bh = self.w * sw + self.h * cw
+        cx, cy = self.x + self.w / 2, self.y + self.h / 2
+        return cx - bw / 2, cy - bh / 2, cx + bw / 2, cy + bh / 2
+
     def to_dict(self) -> dict[str, Any]:
         d = dataclasses.asdict(self)
         d["focal"] = list(self.focal)
+        if self.perspective is not None:
+            d["perspective"] = list(self.perspective)
         return d
 
     @classmethod
@@ -105,6 +143,8 @@ class Block:
             d["style"] = TextStyle.from_dict(d["style"])
         if "focal" in d:
             d["focal"] = tuple(d["focal"])
+        if d.get("perspective") is not None:
+            d["perspective"] = tuple(d["perspective"])
         return cls(**d)
 
 

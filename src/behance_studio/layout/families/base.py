@@ -64,6 +64,9 @@ def apply_overrides(plan: SectionPlan, overrides: dict[str, Any] | None) -> Sect
     for key in ("title", "subtitle", "body", "eyebrow", "background", "layout_hint"):
         if key in overrides and overrides[key] is not None:
             setattr(sp, key, overrides[key])
+    if any(overrides.get(key) is not None for key in ("title", "subtitle", "body", "eyebrow")):
+        sp.meta = dict(sp.meta)
+        sp.meta["user_text"] = True
     if "asset_ids" in overrides and overrides["asset_ids"] is not None:
         sp.asset_ids = list(overrides["asset_ids"])
     if "captions" in overrides:

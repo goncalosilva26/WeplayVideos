@@ -13,7 +13,9 @@ from behance_studio.planning.planner import PlanningContext
 from behance_studio.projects.store import Project
 from helpers import make_asset
 
-FAMILIES = ["editorial", "cinematic", "split", "posters", "gallery", "modular"]
+CONCEPTS = ["minimal", "bold", "photo", "layered", "story"]
+CLASSIC = ["editorial", "cinematic", "split", "posters", "gallery", "modular"]
+FAMILIES = CONCEPTS + CLASSIC
 
 
 @pytest.fixture(scope="module")
@@ -47,7 +49,7 @@ def _geometry(pres):
     ]
 
 
-def test_six_families_registered():
+def test_concepts_first_then_classic_layouts():
     assert available_families() == FAMILIES
 
 
@@ -74,12 +76,12 @@ def test_families_are_structurally_different(demo):
     project, assets = demo
     sigs = {}
     presentations = {}
-    for family in FAMILIES:
+    for family in CLASSIC:
         _plan, pres = _compose(assets, family, 1, brief=project.brief_text)
         sigs[family] = signature(pres)
         presentations[family] = pres
     distances = {}
-    for a, b in itertools.combinations(FAMILIES, 2):
+    for a, b in itertools.combinations(CLASSIC, 2):
         assert signature_distance(sigs[a], sigs[b]) > 0.3, (a, b, sigs[a], sigs[b])
         distances[(a, b)] = layout_distance(presentations[a], presentations[b])
     # Same material: compositions must differ beyond colour (a recolouring of

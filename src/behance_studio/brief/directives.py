@@ -28,6 +28,11 @@ FAMILY_ALIASES = {
     "posters": "posters", "poster": "posters", "graphic posters": "posters", "cartazes": "posters", "graphic": "posters",
     "gallery": "gallery", "curated gallery": "gallery", "galeria": "gallery", "galeria curada": "gallery",
     "modular": "modular", "modular identity": "modular", "identidade modular": "modular", "system": "modular",
+    "minimal": "minimal", "minimal editorial": "minimal", "minimalista": "minimal", "editorial minimal": "minimal",
+    "bold": "bold", "bold graphic": "bold", "grafico": "bold", "grafica": "bold",
+    "photo": "photo", "photographic": "photo", "premium photographic": "photo", "fotografico": "photo",
+    "layered": "layered", "experimental": "layered", "layered experimental": "layered", "camadas": "layered",
+    "story": "story", "storytelling": "story", "immersive story": "story", "narrativa imersiva": "story",
 }
 
 

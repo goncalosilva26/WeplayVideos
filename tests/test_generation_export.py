@@ -32,10 +32,10 @@ def generated(tmp_path_factory, demo_assets_dir):
     return project, result, events
 
 
-def test_generation_produces_six_complete_proposals(generated):
+def test_generation_produces_five_concept_proposals(generated):
     project, result, events = generated
-    assert len(result.versions) == 6 and not result.failures
-    assert {v.family for v in result.versions} == {"editorial", "cinematic", "split", "posters", "gallery", "modular"}
+    assert len(result.versions) == 5 and not result.failures
+    assert [v.family for v in result.versions] == ["minimal", "bold", "photo", "layered", "story"]
     assert result.category == "brand_identity" and result.language == "en"
     manager = VersionManager(project)
     for record in result.versions:

@@ -208,6 +208,11 @@ def apply_theme(app: QApplication) -> None:
 
 
 FAMILY_COLORS = {
+    "minimal": "#C9B79C",
+    "bold": "#F2B63D",
+    "photo": "#8E7A66",
+    "layered": "#7C6CF0",
+    "story": "#E2574C",
     "editorial": "#C9A46A",
     "cinematic": "#E2574C",
     "split": "#5B8DEF",

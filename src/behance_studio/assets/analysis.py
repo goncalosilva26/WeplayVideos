@@ -16,7 +16,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
-ANALYSIS_VERSION = 3
+ANALYSIS_VERSION = 4
 ANALYSIS_SIZE = 384
 
 
@@ -164,6 +164,55 @@ def hamming(a: str, b: str) -> int:
     return bin(int(a, 16) ^ int(b, 16)).count("1")
 
 
+def text_regions(gray: np.ndarray, opaque: np.ndarray | None = None) -> tuple[list[tuple[float, float, float, float]], float]:
+    """Lines of typography in an image (classical detector, no AI).
+
+    Strong edges are joined horizontally into candidate lines, which are kept
+    only when they look like type: an elongated box, ink strongly separated
+    from a plain ground, and many stroke transitions. Returns normalised
+    boxes and their total area fraction. Textures (wood grain, foliage) have
+    weak or irregular edges and are rejected; the result is an estimate.
+    """
+    h, w = gray.shape
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    grad = cv2.morphologyEx(gray, cv2.MORPH_GRADIENT, k)
+    thr = max(50, int(cv2.threshold(grad, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)[0]))
+    bw = (grad >= thr).astype(np.uint8) * 255
+    if opaque is not None:
+        bw[~opaque] = 0
+    kw = max(5, w // 90)
+    joined = cv2.morphologyEx(bw, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (kw, 1)))
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(joined, connectivity=8)
+    boxes = []
+    for i in range(1, n):
+        x, y, bw_, bh, area = stats[i]
+        if bh < max(5, h * 0.008) or bh > h * 0.22 or bw_ < bh * 1.6 or bw_ < w * 0.025:
+            continue
+        roi = bw[y:y + bh, x:x + bw_]
+        fill = roi.mean() / 255
+        if not 0.18 <= fill <= 0.75:
+            continue
+        g = gray[y:y + bh, x:x + bw_]
+        # Text: strongly bimodal (ink on a plain ground).
+        _t, split = cv2.threshold(g, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+        a, b = g[split > 0], g[split == 0]
+        if a.size < 4 or b.size < 4:
+            continue
+        sep = abs(float(a.mean()) - float(b.mean())) / (float(g.std()) + 1e-6)
+        spread = (float(a.std()) + float(b.std())) / 2
+        if sep < 1.6 or spread > 34:
+            continue
+        # Character-like vertical strokes: many transitions along the middle row.
+        mid = split[bh // 2]
+        transitions = int(np.count_nonzero(np.diff(mid.astype(np.int16)) != 0))
+        if transitions < max(4, bw_ / bh * 1.2):
+            continue
+        boxes.append((x / w, y / h, (x + bw_) / w, (y + bh) / h))
+    boxes.sort(key=lambda b: -(b[2] - b[0]) * (b[3] - b[1]))
+    area = sum((b[2] - b[0]) * (b[3] - b[1]) for b in boxes)
+    return boxes, float(area)
+
+
 def analyze_image(img: Image.Image) -> dict[str, Any]:
     rgb, alpha = _to_arrays(img)
     h, w = rgb.shape[:2]
@@ -259,9 +308,19 @@ def analyze_image(img: Image.Image) -> dict[str, Any]:
         for (fx, fy, fw, fh) in found[:8]:
             faces.append([float(fx / w), float(fy / h), float(fw / w), float(fh / h)])
 
+    # --- typography inside the image --------------------------------------
+    text_gray = gray if opaque.all() else np.where(opaque, gray, 255).astype(np.uint8)
+    try:
+        text_boxes, text_area = text_regions(text_gray, opaque if not opaque.all() else None)
+    except cv2.error:  # pragma: no cover - degenerate images
+        text_boxes, text_area = [], 0.0
+
     mean_sat = float(sat.mean() / 255.0) if sat.size else 0.0
     return {
         "version": ANALYSIS_VERSION,
+        "text_lines": len(text_boxes),
+        "text_fraction": round(text_area, 4),
+        "text_boxes": [[round(v, 4) for v in b] for b in text_boxes[:16]],
         "colors": colors,
         "content_colors": content_colors,
         "background": background,

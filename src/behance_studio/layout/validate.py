@@ -20,6 +20,7 @@ from typing import Any
 from behance_studio.design import color as C
 from behance_studio.layout import text as T
 from behance_studio.layout.fitting import MAX_CROP, TOP_ANCHORED_CROP, _content_safe
+from behance_studio.layout.devices import media_rect
 from behance_studio.layout.model import Block, Presentation, Section
 from behance_studio.planning.models import PresentationPlan
 from behance_studio.projects.models import AssetRecord
@@ -98,8 +99,12 @@ def _background_under(section: Section, block: Block) -> str:
 
 
 def displayed_width(block: Block, asset: AssetRecord) -> float:
-    inner_w = max(1.0, block.w - 2 * block.pad)
-    inner_h = max(1.0, block.h - 2 * block.pad)
+    _x, _y, mw, mh = media_rect(block)
+    inner_w = max(1.0, mw - 2 * block.pad)
+    inner_h = max(1.0, mh - 2 * block.pad)
+    if block.zoom and block.zoom > 1 and block.fit == "cover":
+        inner_w *= block.zoom
+        inner_h *= block.zoom
     if block.fit == "cover":
         return max(inner_w, inner_h * asset.aspect)
     return min(inner_w, inner_h * asset.aspect)
@@ -118,7 +123,8 @@ def validate_section(section: Section, width: float, assets: dict[str, AssetReco
         add("warning", "section_large", f"Section '{title}' is very tall ({section.height:.0f}px); consider fewer images.")
     for b in section.blocks:
         tol = 1.5
-        if b.x < -tol or b.y < -tol or b.right > width + tol or b.bottom > section.height + tol:
+        x0, y0, x1, y1 = b.bounds()
+        if not b.meta.get("bleed") and (x0 < -tol or y0 < -tol or x1 > width + tol or y1 > section.height + tol):
             add("error", "out_of_bounds", f"An element extends outside section '{title}'.", b)
         if b.w <= 0 or b.h <= 0:
             add("error", "invalid_size", f"An element in '{title}' has an invalid size.", b)
@@ -136,6 +142,10 @@ def validate_section(section: Section, width: float, assets: dict[str, AssetReco
                 continue
             text_over_image = (a.kind == "text" and a.overlay and b.kind in ("image", "video")) or (b.kind == "text" and b.overlay and a.kind in ("image", "video"))
             if text_over_image:
+                continue
+            # Deliberately layered media (collages, stacked cards) may overlap
+            # each other — never text.
+            if a.kind != "text" and b.kind != "text" and (a.meta.get("layered") or b.meta.get("layered")):
                 continue
             if a.kind == "text" and b.kind == "text" and (a.overlay or b.overlay) and abs(a.y - b.y) > 0:
                 # stacked overlay labels share a scrim, never each other's lines
@@ -224,8 +234,9 @@ def validate_presentation(
     for s in presentation.sections:
         for aid in set(s.asset_ids()):
             asset = assets.get(aid)
-            # A logo signing off the cover/closing is a deliberate repetition.
-            if s.type in ("cover", "closing") and asset is not None and asset.effective_kind in ("logo", "logo_variant", "monogram"):
+            # Brand marks recur deliberately across an identity case study
+            # (cover, logo pages, badges, sign-off).
+            if asset is not None and asset.effective_kind in ("logo", "logo_variant", "monogram"):
                 continue
             usage[aid] += 1
     reprise_ok = {s.asset_ids()[0] for s in presentation.sections if s.type == "closing" and s.asset_ids()}

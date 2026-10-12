@@ -75,6 +75,12 @@ def render_previews(
                         browser.capture(page, 0, pres.height, pres.width, CAPTURE_SCALE, png)
                         with Image.open(png) as full:
                             _save_thumbs(full, thumb, strip)
+                            try:
+                                from behance_studio.qa.rendered import inspect_rendered
+
+                                issues[i] = list(issues[i]) + inspect_rendered(pres, full, CAPTURE_SCALE)
+                            except Exception as exc:  # noqa: BLE001 - QA must never block previews
+                                log.warning("Rendered QA failed: %s", exc)
                     finally:
                         browser.close_page(page)
                     progress((i + 1) / len(jobs), f"Rendered preview {i + 1} of {len(jobs)}")

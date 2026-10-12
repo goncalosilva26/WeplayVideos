@@ -277,10 +277,13 @@ class WorkspacePage(QWidget):
         self.creativity.setValue(int(self.state.settings.creativity * 100))
         form.addRow("Creative variation", self.creativity)
         lay.addLayout(form)
-        lay.addWidget(section_title("Layout families"))
+        from behance_studio.layout.families import CONCEPT_FAMILIES
+
+        lay.addWidget(section_title("Concepts · then classic layouts"))
         grid = QGridLayout()
         self.family_checks: dict[str, QCheckBox] = {}
-        for i, fid in enumerate(available_families()):
+        ordered = [f for f in available_families() if f in CONCEPT_FAMILIES] + [f for f in available_families() if f not in CONCEPT_FAMILIES]
+        for i, fid in enumerate(ordered):
             info = family_info(fid)
             cb = QCheckBox(info.name)
             cb.setChecked(fid in self.state.settings.families)

@@ -284,6 +284,46 @@ def finalize_relationships(project, changed: list[AssetRecord]) -> None:
     project.save_assets(assets)
 
 
+def _import_with_archives(project, paths, archives, copy, token, progress, workers, analyze, adopt_project_texts) -> ImportReport:
+    """Extract archives to the cache, import everything, remove the extraction."""
+    import shutil
+
+    from behance_studio.assets.archive import extract_zip
+
+    report = ImportReport()
+    others = [p for p in paths if p not in archives]
+    groups: list[tuple[list[Path], bool | None]] = [(others, copy)] if others else []
+    extracted: list[Path] = []
+    try:
+        for archive in archives:
+            try:
+                folder = extract_zip(archive, project.cache_subdir("unzip"))
+            except AssetError as exc:
+                report.errors.append((str(archive), exc.message))
+                continue
+            extracted.append(folder)
+            groups.append(([folder], True))  # extracted files live in the cache: always copy them
+        for i, (group, group_copy) in enumerate(groups):
+            sub = import_paths(project, group, copy=group_copy, token=token,
+                               progress=lambda f, m, i=i: progress((i + f) / len(groups), m), workers=workers,
+                               analyze=analyze, adopt_project_texts=adopt_project_texts)
+            report.added += sub.added
+            report.duplicates += sub.duplicates
+            report.skipped += sub.skipped
+            report.errors += sub.errors
+            report.near_duplicates += sub.near_duplicates
+            report.project_texts_ignored += sub.project_texts_ignored
+            report.brief_imported = report.brief_imported or sub.brief_imported
+            report.script_imported = report.script_imported or sub.script_imported
+            if sub.cancelled:
+                report.cancelled = True
+                break
+    finally:
+        for folder in extracted:
+            shutil.rmtree(folder, ignore_errors=True)
+    return report
+
+
 def import_paths(
     project,
     paths: Iterable[Path | str],
@@ -294,7 +334,11 @@ def import_paths(
     analyze: bool = True,
     adopt_project_texts: bool = True,
 ) -> ImportReport:
-    """Import files and folders (recursively) into ``project``."""
+    """Import files, folders (recursively) and ZIP archives into ``project``."""
+    paths = [Path(p) for p in paths]
+    archives = [p for p in paths if p.is_file() and p.suffix.lower() == ".zip"]
+    if archives:
+        return _import_with_archives(project, paths, archives, copy, token, progress, workers, analyze, adopt_project_texts)
     report = ImportReport()
     copy = project.config.copy_assets if copy is None else copy
     files = list(iter_files(Path(p) for p in paths))

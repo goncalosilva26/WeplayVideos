@@ -3,24 +3,28 @@
 A Windows 10/11 desktop application that turns a folder of raw design material
 into complete, portfolio-ready presentations for Behance.
 
-Create a project, drop in your logos, mockups, photographs, posters, social
-media pieces and videos, optionally add a creative brief (`brief.txt`) or a
-detailed script (`GUIAO_PROJETO.txt`), and press **Generate Projects**. Behance
-Studio analyses the material, plans a narrative, and designs one complete
-proposal in each of six distinct layout families. Compare them side by side,
-choose the one you prefer, refine it if needed, and export to PDF, images, an
-HTML package or a ZIP.
+Create a project, drop in a folder or a ZIP of your logos, mockups,
+photographs, posters, social media pieces and videos, and press **Generate
+Projects**. No brief, script, categorising or layout choices are required:
+Behance Studio analyses the material, selects the strongest assets, and a
+Creative Director plans **five complete, differently art-directed case
+studies**. Compare them side by side, choose one, refine it if you like, and
+export to PDF, images, an HTML package or a ZIP. A creative brief
+(`brief.txt`) and a detailed script (`GUIAO_PROJETO.txt`) remain optional
+advanced inputs.
 
-Everything works offline. AI providers are optional and only refine results.
-
-| Layout family | Character |
+| Concept | Art direction |
 | --- | --- |
-| **Editorial Classic** | 12-column editorial grid, hanging headers, serif titles, hairline rules, calm rhythm |
-| **Cinematic Story** | Dark, immersive, full-bleed widescreen imagery, title cards, strong pacing |
-| **Split Narrative** | Asymmetric split screens, coloured text panels beside full-height images |
-| **Graphic Posters** | Every section a poster: brand-colour fields, huge fitted type, stickers, marquees |
-| **Curated Gallery** | Museum-like walls, uncropped images at their own proportions, asymmetric hangs |
-| **Modular Identity** | Bento grid of modules, brand colours as tiles, monospaced labels |
+| **Minimal Editorial** | Light surfaces, large images framed by negative space, refined serif type, small tracked labels |
+| **Bold Graphic** | Full brand-colour fields, poster-scale type, seamless modules, artwork staged with hard shadows |
+| **Premium Photographic** | Dark surfaces, edge-to-edge imagery, seamless pairs, framed campaign pieces under soft light |
+| **Layered Experimental** | Overlapping cards, arch/circle masks, rotated artwork with depth, pattern grounds |
+| **Immersive Story** | Numbered chapter spreads, cinematic frames and filmstrips, brand messages as pauses |
+
+The six layout families of version 1 remain available as *Classic layouts*.
+Everything works offline; AI providers are optional and only refine results.
+See [docs/samples/](docs/samples/) for renders and
+[docs/ARCHITECTURE_2.0.md](docs/ARCHITECTURE_2.0.md) for the design of 2.0.
 
 ## Install and run (Windows 10/11)
 

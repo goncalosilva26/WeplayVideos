@@ -27,7 +27,8 @@ SUPPORTED_EXTENSIONS = (
 
 FILE_DIALOG_FILTER = (
     "Supported files (*.jpg *.jpeg *.png *.webp *.tif *.tiff *.bmp *.gif *.svg "
-    "*.mp4 *.mov *.webm *.m4v *.txt *.md *.json *.pdf);;"
+    "*.mp4 *.mov *.webm *.m4v *.txt *.md *.json *.pdf *.zip);;"
+    "ZIP archives (*.zip);;"
     "Images (*.jpg *.jpeg *.png *.webp *.tif *.tiff *.bmp *.gif *.svg);;"
     "Video (*.mp4 *.mov *.webm *.m4v);;"
     "Documents (*.txt *.md *.json *.pdf);;All files (*)"

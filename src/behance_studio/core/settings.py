@@ -18,14 +18,11 @@ from behance_studio.core.paths import default_projects_dir, user_data_dir
 
 log = get_logger(__name__)
 
-ALL_FAMILIES = [
-    "editorial",
-    "cinematic",
-    "split",
-    "posters",
-    "gallery",
-    "modular",
-]
+# 2.0 concepts (the default) followed by the classic v1 layouts.
+DEFAULT_FAMILIES = ["minimal", "bold", "photo", "layered", "story"]
+CLASSIC_FAMILIES = ["editorial", "cinematic", "split", "posters", "gallery", "modular"]
+ALL_FAMILIES = DEFAULT_FAMILIES + CLASSIC_FAMILIES
+SETTINGS_VERSION = 2
 
 
 @dataclass
@@ -63,8 +60,8 @@ class AppSettings:
     copy_assets_on_import: bool = True
     presentation_language: str = "en"
     design_width: int = 1400
-    proposal_count: int = 6
-    families: list[str] = field(default_factory=lambda: list(ALL_FAMILIES))
+    proposal_count: int = 5
+    families: list[str] = field(default_factory=lambda: list(DEFAULT_FAMILIES))
     creativity: float = 0.5
     worker_threads: int = 0  # 0 = automatic
     browser_path: str = ""
@@ -76,6 +73,7 @@ class AppSettings:
     last_import_dir: str = ""
     last_export_dir: str = ""
     onboarding_done: bool = False
+    settings_version: int = SETTINGS_VERSION
 
     def resolved_projects_dir(self) -> Path:
         path = Path(self.projects_dir) if self.projects_dir else default_projects_dir()
@@ -149,9 +147,13 @@ class SettingsStore:
                 pass
             data = {}
         settings = AppSettings.from_dict(data if isinstance(data, dict) else {})
-        settings.families = [f for f in settings.families if f in ALL_FAMILIES] or list(
-            ALL_FAMILIES
-        )
+        if isinstance(data, dict) and data and int(data.get("settings_version", 1)) < 2:
+            # Upgrading from 1.x: generate the five 2.0 concepts by default;
+            # the classic layouts stay available in Settings.
+            settings.families = list(DEFAULT_FAMILIES)
+            settings.proposal_count = len(DEFAULT_FAMILIES)
+            settings.settings_version = SETTINGS_VERSION
+        settings.families = [f for f in settings.families if f in ALL_FAMILIES] or list(DEFAULT_FAMILIES)
         return settings
 
     def save(self) -> None:
