@@ -47,6 +47,36 @@ configured AI provider. Right-click an asset to correct its type, exclude it
 from presentations, reveal it in Explorer, or remove it (removed copies go to
 the project's Trash and can be recovered).
 
+### Sections from your folders
+
+If you organise the delivery in folders named after sections, drop the
+**whole project folder** (or several section folders at once):
+
+```
+Butter & Bean/
+  01 Logo/            02 Brand Elements/      03 Packaging/Cups/…
+  04 Campaign/Posters/…   04 Campaign/Outdoor/…   05 Social Media/…
+```
+
+Every image then stays in the section its folder names, in your order
+(numbers are kept for the order and removed from titles; folders such as
+`JPG`, `Export`, `Final` or `v2` are ignored; a subfolder like
+`Campaign/Posters` stays inside Campaign). The type recognised for an image —
+by the offline analysis or by local AI — only changes *how* it is shown,
+never *which section* it is in. Images outside the section folders are
+placed by what they show.
+
+The **Sections** choice in the project's side panel switches between
+*Follow my folders* (default) and *Let AI organise by content*, which
+ignores the folders and groups images by their recognised type.
+
+After every generation, **Section report** (or
+`BehanceStudio-cli diagnose <project>`) opens
+`Diagnostics/latest.txt`: for every image, its folder, the measured type,
+the AI answer and whether it was applied (and why not), the final section
+and where each proposal placed it. Any image shown outside its section is
+listed there.
+
 ## 3. The creative brief (`brief.txt`)
 
 Optional, plain text, English or Portuguese. Use `Field: value` lines; any
@@ -235,6 +265,11 @@ selected.
   and check the log (`%APPDATA%\BehanceStudio\logs\behance_studio.log`).
 * **Videos do not play in the in-app preview** — the preview uses a WebM
   proxy that is generated automatically; exports keep the original video.
+* **An image appears in the wrong section** — open *Section report*. If its
+  folder is shown as “—”, the image was imported on its own (not inside its
+  section folder) and was placed by type: re-import the whole project folder,
+  or right-click the image to set its type. Projects imported before this
+  version have no folder information; import the folder again.
 * **A project folder was moved** — open it again with *Open project*; paths
   inside the project are relative. Assets that were linked (not copied) can
   be relinked from the asset context menu.

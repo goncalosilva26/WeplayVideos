@@ -34,6 +34,7 @@ from behance_studio.generation.proposal import ProposalData
 from behance_studio.layout.engine import ProposalSpec, build_plan, compose
 from behance_studio.layout.families import available_families, family_info, is_concept
 from behance_studio.layout.validate import Issue, QualityReport, layout_distance, validate_presentation
+from behance_studio.planning.assignment import assign_sections, persist
 from behance_studio.planning.fit import enforce_section_fit
 from behance_studio.planning.planner import PlanningContext
 from behance_studio.projects.models import VersionRecord
@@ -84,6 +85,7 @@ class GenerationResult:
     language: str = ""
     elapsed: float = 0.0
     ai_used: bool = False
+    diagnostics: str = ""  # path of the section diagnostics report
 
 
 def _hash(text: str) -> str:
@@ -357,7 +359,14 @@ def generate(
 
     # 4 ── plan
     tracker.start("plan", STAGE_LABELS["plan"])
-    ctx = PlanningContext(project.name, assets, directives, direction)
+    # The validated asset -> section association (the designer's folders when
+    # the project is organised in folders); stored on every asset.
+    assignment = assign_sections(assets, getattr(project.config, "section_source", "auto"), directives.language)
+    changed_assets = persist(assignment, assets)
+    if changed_assets:
+        project.save_assets(changed_assets)
+    result.notes.extend(assignment.notes)
+    ctx = PlanningContext(project.name, assets, directives, direction, sections=assignment)
     specs = proposal_specs(request, directives.families_allowed)
     plans = []
     concepts = [s.family for s in specs]
@@ -375,9 +384,10 @@ def generate(
                     result.ai_used = True
             if plan is None:
                 plan = build_plan(ctx, spec)
-            # Every image stays in a section that matches what it is.
-            fit = enforce_section_fit(plan, {a.id: a for a in assets})
+            # Every image stays in its intended section (its folder's, when organised).
+            fit = enforce_section_fit(plan, {a.id: a for a in assets}, assignment)
             plan.notes.extend(fit.notes({a.id: a.filename for a in assets}))
+            plan.asset_sections = assignment.to_plan()
             if ai_service is not None and request.use_ai:
                 try:
                     if ai_service.write_copy(project, plan, directives, direction):
@@ -477,10 +487,12 @@ def generate(
     # 9 ── save
     tracker.start("save", STAGE_LABELS["save"])
     manager = VersionManager(project)
+    saved: list[tuple[str, ProposalData]] = []
     for i, proposal in enumerate(proposals):
         token.raise_if_cancelled()
         try:
             record = manager.create(proposal)
+            saved.append((record.name, proposal))
             for kind in ("thumb", "strip"):
                 src = staging / f"{i}-{kind}.jpg"
                 if src.exists():
@@ -496,6 +508,23 @@ def generate(
         staging.rmdir()
     except OSError:
         pass
+
+    # Diagnostics: where every image came from and where it went (and why).
+    try:
+        from behance_studio.generation.diagnostics import build_report, write_report
+
+        if ai_service is not None and request.use_ai:
+            ai_note = f"{ai_service.provider.kind} · {ai_service.provider.model} — " + "; ".join(
+                n for n in getattr(ai_service, "log", []) if "recognition" in n) or ai_service.status()
+        else:
+            ai_note = "not used (offline: measured types only)"
+        report = build_report(project, project.list_assets(), assignment, saved, ai_note)
+        result.diagnostics = str(write_report(project, report))
+        bad = sum(len(r["violations"]) for r in report["proposals"])
+        result.notes.append(f"Section check: {'all images are in their intended sections' if not bad else f'{bad} image(s) outside their section'}"
+                            f" — details in {result.diagnostics}")
+    except Exception as exc:  # noqa: BLE001 - diagnostics must never break a generation
+        log.warning("Section diagnostics could not be written: %s", exc)
 
     # 10 ── present
     tracker.start("present", STAGE_LABELS["present"])

@@ -277,6 +277,16 @@ class WorkspacePage(QWidget):
         self.creativity.setRange(0, 100)
         self.creativity.setValue(int(self.state.settings.creativity * 100))
         form.addRow("Creative variation", self.creativity)
+        from PySide6.QtWidgets import QComboBox
+
+        self.section_source = QComboBox()
+        self.section_source.addItem("Follow my folders (recommended)", "auto")
+        self.section_source.addItem("Let AI organise by content", "content")
+        self.section_source.setToolTip("When your files are organised in section folders (01 Logo, 02 Packaging…), every image stays in "
+                                       "its folder's section in every proposal. Choose “Let AI organise by content” only if you want "
+                                       "the app to regroup the images itself.")
+        self.section_source.currentIndexChanged.connect(self._section_source_changed)
+        form.addRow("Sections", self.section_source)
         lay.addLayout(form)
         from behance_studio.layout.families import CONCEPT_FAMILIES
 
@@ -313,6 +323,9 @@ class WorkspacePage(QWidget):
             return
         self.header.title.setText(project.name)
         self.header.set_subtitle(str(project.root))
+        self.section_source.blockSignals(True)
+        self.section_source.setCurrentIndex(max(0, self.section_source.findData("content" if project.config.section_source == "content" else "auto")))
+        self.section_source.blockSignals(False)
         self._load_assets()
         self._load_texts()
         self._load_overview()
@@ -428,6 +441,17 @@ class WorkspacePage(QWidget):
         else:
             ai_text = f"AI provider: {provider}. " + ("This project allows AI assistance." if project.config.ai_consent else "Nothing from this project is sent until you allow it in Settings.")
         lay.addWidget(label(ai_text, "Faint", wrap=True))
+        from behance_studio.planning.assignment import assign_sections
+
+        organisation = assign_sections(assets, project.config.section_source, d.language)
+        if organisation.by_folders:
+            names = [s.title for s in organisation.folder_map.sections]
+            lay.addWidget(label("Sections from your folders: " + " › ".join(names[:12]) + (" …" if len(names) > 12 else ""), "Muted", wrap=True))
+        elif project.config.section_source == "content":
+            lay.addWidget(label("Sections: organised by content (AI / measured types), as you chose.", "Muted", wrap=True))
+        else:
+            lay.addWidget(label("Sections: no section folders found — images are grouped by what they show.", "Muted", wrap=True))
+        lay.addWidget(button("Section report", "file-text", "Ghost", on_click=self._open_section_report))
         if provider == "ollama" and self.state.local_ai is not None and self.state.local_ai.ready:
             lay.addWidget(button("Recognise images with local AI", "cpu", "Ghost", on_click=lambda: self.actions.analyse_with_local_ai(announce=True)))
         lay.addStretch(1)
@@ -485,6 +509,24 @@ class WorkspacePage(QWidget):
         if not d.issues:
             lines.append("✔ All referenced files were found.")
         self.script_status.setText("\n".join(lines))
+
+    def _section_source_changed(self) -> None:
+        project = self.state.project
+        value = self.section_source.currentData()
+        if project is not None and project.config.section_source != value:
+            project.config.section_source = value
+            project.save_config()
+
+    def _open_section_report(self) -> None:
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+
+        project = self.state.project
+        report = project.root / "Diagnostics" / "latest.txt" if project else None
+        if report is None or not report.exists():
+            show_error(self, "No section report yet: it is written after each generation.")
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(report)))
 
     def _generate_custom(self) -> None:
         families = [f for f, cb in self.family_checks.items() if cb.isChecked()]

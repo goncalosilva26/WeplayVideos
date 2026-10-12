@@ -1,6 +1,6 @@
 # Development status
 
-_Last updated: 2026-10-12 · version 2.0.0.dev1 · branch `claude/behance-studio-windows-app-o0z32d`_
+_Last updated: 2026-10-12 · version 2.0.0.dev1 (section association fix 2.2) · branch `claude/behance-studio-windows-app-o0z32d`_
 
 This file is the persistent record of what exists, what was verified and what
 is still open. Update it at every milestone.
@@ -41,6 +41,60 @@ and `docs/samples/v2/` (the five 2.0 concepts, same synthetic fixture).
 | Section check: misplaced images moved to a section of their kind (never swapped or dropped; script sections only reported) + `section_mismatch` warning; offline director no longer labels mixed imagery "Photography" | **Done** | `tests/test_ollama.py`; all 11 families checked on the fixture: 0 mismatches |
 | Ollama as default provider (settings migration "none" → "ollama"; paid choices untouched) | **Done** | `tests/test_ollama.py` |
 | **Real model** (Qwen3-VL etc.) | **Not verified here** — ollama.com and registry.ollama.ai are blocked by this environment's network policy and there is no GPU. `tests/test_ollama_live.py` and `ai-check --test` run the real checks on a PC with Ollama. | — |
+
+### Section association fix — 2.2
+
+Problem reported: with Qwen3-VL analysing every image, images were still
+shown in unrelated sections even when the project was organised in
+section folders. Reproduced with an organised fixture
+(`tests/organized_fixture.py`: "01 Logo", "02 Brand Elements",
+"03 Packaging/Cups|Bags|Boxes/JPG", "04 Campaign/Posters|Outdoor",
+"05 Social Media", "06 Photography", camera file names, duplicate names):
+before the fix, all 11 layout families put Packaging images under
+"Photography", most colour/type sheets were typed "pattern" and dropped,
+and the Layered concept mixed campaign posters with social posts.
+
+Root causes found in the code:
+
+1. **Folders never reached planning.** The folder path was used only as a
+   word hint for the type guess; every planner (classic planner, 2.0
+   director, AI director) grouped images by *type*, so a section was only
+   as good as the type guess. When section folders were dropped one by one,
+   the folder's own name was not stored at all.
+2. **File-name words beat the folder** in the heuristic type guess
+   (`IMG_4021.jpg` in `03 Packaging` → photo).
+3. **AI answers were applied or ignored without a record**: an answer was
+   silently ignored when the heuristic was confident; a re-analysis wiped the
+   stored AI answer; an AI type contradicting the folder was applied and
+   moved the image to another section.
+4. **The section check moved images by type**, so it could not restore a
+   folder grouping and sometimes made it worse.
+5. **The AI director did not know the sections** and could mix assets of
+   several sections in one storyboard module.
+6. **Rendering bugs:** the offline director could plan two images into a
+   one-image "stage" module (one never rendered); logo modules rendered the
+   primary logo instead of the section's own image.
+7. **Cache per project only, keyed without folder/name context**, so the
+   same images were analysed again in another project.
+
+| Area | Status | Verified by |
+| --- | --- | --- |
+| Import keeps each file's folder path, including the dropped folder's own name (`AssetRecord.source_folder`); whole folder, separate section folders and ZIP | **Done** | `tests/test_sections.py::test_import_preserves_folders_however_they_are_dropped` |
+| Folder → section map (`assets/folders.py`): wrapper folder skipped, numbering kept for order, utility folders (`JPG`, `Final`, `v2`…) ignored, broad folders as chapters, subfolders stay inside their section, unknown names kept as custom sections | **Done** | `test_folder_map_handles_real_world_structures` |
+| One validated asset → section mapping per generation (`planning/assignment.py`), stored on each asset and on the plan; folders authoritative; loose images placed by type; project setting *Sections*: follow folders / let AI organise by content | **Done** | `test_unorganised_project_is_grouped_by_ai`, `test_content_mode_lets_ai_reorganise_when_asked`, `test_missing_metadata_and_root_level_files`, `test_duplicate_and_similar_file_names` |
+| Classic planner, 2.0 director (per-concept treatments) and AI director plan per folder section; section check moves misplaced images back, restores skipped sections and folder order; validator `section_mismatch` uses the mapping | **Done** | `test_section_folders_beat_misleading_file_names`, `test_every_layout_family_keeps_images_in_their_folder_sections` (11 families, 0 moves needed, folder order, concept distance > 0.25), `test_ai_storyboard_cannot_mix_or_drop_sections` |
+| AI decision recorded for every image (applied / not applied with reason / rejected / not run); folder-contradicting types not applied; analysis no longer wiped by re-analysis | **Done** | `test_wrong_ai_answers_never_move_images_end_to_end` (mock Ollama, real previews sent) |
+| Global content-addressed analysis cache (`ai/cache.py`, key: SHA-256 + provider + model + prompt version + name/folder context), per-key locks | **Done** | `test_analysis_is_cached_by_content` |
+| Diagnostics after every generation: `<project>/Diagnostics/latest.txt|json` (path, folder section, measured type, AI result + decision, final type and who decided, intended section + reasons, placement per proposal, violations, planned-but-not-rendered); UI *Section report*; CLI `diagnose` | **Done** | `test_wrong_ai_answers_never_move_images_end_to_end`, `test_cli_diagnose` |
+| Real Qwen3-VL run on the user's project | **Not verified here** (no Ollama/GPU, model hosts blocked) | — |
+
+**Metric change, disclosed:** `layout_distance` used to compare only
+sections with the same plan id; folder planning inserts chapter cards that
+shift ids, so identical proposals could look different and different ones
+alike. It now pairs sections by plan id or identical image set and counts an
+image section that exists in only one proposal as 0.8 different. Identical
+proposals still score 0, recolours ≤ 0.2; the five concepts on the
+organised fixture score about 0.62–0.66 pairwise.
 
 **Not available for testing:** the Kanoffe reference page (www.behance.net is
 blocked by this environment's network policy) and the real Butter & Bean
@@ -203,7 +257,11 @@ Latest results: see "Last test runs" at the end of this file.
 
 ### Last test runs (2026-10-12, Linux, Python 3.14.6)
 
-* Full suite: **102 passed** in 2 min 16 s.
+* After the section association fix (2.2): full suite **198 passed,
+  2 skipped** in 4 min 27 s. The two skipped tests are
+  `tests/test_ollama_live.py` (they need a real Ollama with a vision model,
+  which this environment cannot install). `tests/test_sections.py`: 12 passed.
+* Version 1 full suite: **102 passed** in 2 min 16 s.
 * Later full runs: 101 passed, 1 failed — `test_ui.py::test_full_workflow`,
   where the export step could not start Chromium (`spawn … ENOENT`). Cause:
   a command run during development (`uv pip compile … -o /dev/null`)

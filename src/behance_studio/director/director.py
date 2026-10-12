@@ -222,7 +222,7 @@ def _imagery_groups(b: _Builder, assets: list[AssetRecord], pattern: list[str], 
             queue.remove(wide)
             b.add(_type_for([wide], type_), "fullbleed", [wide])
             continue
-        need = {"duo": 2, "trio": 3, "masked_trio": 3, "collage": 2}.get(module, 2)
+        need = {"stage": 1, "duo": 2, "trio": 3, "masked_trio": 3, "collage": 2}.get(module, 2)
         if len(queue) < need:
             if len(queue) == 1:
                 lone = queue.pop(0)
@@ -498,6 +498,232 @@ def _story(b: _Builder) -> None:
     _closing(b, tagline)
 
 
+# ------------------------------------------------------- folder-organised projects
+# When the designer organised the files in section folders, each concept keeps
+# every image inside its folder's section. Concepts still differ in cover,
+# modules, image sizes, rhythm, chapters, pauses and backgrounds.
+LOGO_KINDS_ = {"logo", "logo_variant", "monogram"}
+# How each concept shows photographs inside a folder section.
+FOLDER_PHOTO_PATTERN = {"minimal": ["duo", "duo", "fullbleed"], "bold": ["stage"], "photo": ["trio", "fullbleed", "duo"],
+                        "layered": ["trio", "duo"], "story": ["fullbleed", "duo"]}
+
+
+def _treatment(a: AssetRecord) -> str:
+    from behance_studio.assets.understanding import asset_nature
+
+    kind, nature = a.effective_kind, asset_nature(a)
+    if kind in LOGO_KINDS_:
+        return "logo"
+    if kind in ("palette", "typography") or nature == "document":
+        return "sheet"
+    if kind == "pattern":
+        return "pattern"
+    if nature == "motion":
+        return "motion"
+    if kind == "social":
+        return "social"
+    if nature == "screen":
+        return "screen"
+    if nature == "artwork":
+        return "art"
+    return "photo"
+
+
+def _folder_hero(b: "_Builder", groups) -> AssetRecord | None:
+    """A cover image: a landscape photograph, preferably from a photography folder."""
+    from behance_studio.assets.understanding import asset_nature
+    from behance_studio.layout.fitting import can_cover
+
+    def pool(types: set[str] | None) -> list[AssetRecord]:
+        out = []
+        for placement, ids in groups:
+            if types is not None and placement.type not in types:
+                continue
+            out += [b.inv.by_id[i] for i in ids if i in b.inv.by_id and asset_nature(b.inv.by_id[i]) == "photo"]
+        return [a for a in out if a.aspect >= 1.2 and can_cover(a, 1.6)]
+
+    candidates = pool({"photography"}) or pool(None)
+    candidates.sort(key=lambda a: -((a.roles or {}).get("hero", 0) * 0.6 + (a.analysis or {}).get("sharpness", 0) / 4000))
+    if not candidates:
+        return None
+    rank = {"photo": 0, "story": 1}.get(b.concept, b.rng.randrange(2))  # concepts open on different images
+    return candidates[rank % len(candidates)]
+
+
+def _chunks(items: list, size: int) -> list[list]:
+    return [items[i : i + size] for i in range(0, len(items), size)]
+
+
+# Module per concept for each kind of material (photographs use FOLDER_PHOTO_PATTERN).
+GROUP_MODULE = {
+    "sheet": {"minimal": "doc_stage", "bold": "stage_pair", "photo": "poster_wall", "layered": "float_stack", "story": "doc_stage"},
+    "pattern": {"minimal": "pattern_field", "bold": "pattern_field", "photo": "poster_wall", "layered": "float_stack", "story": "duo"},
+    "social": {"minimal": "phones", "bold": "feed_grid", "photo": "poster_wall", "layered": "float_stack", "story": "stage_pair"},
+    "art": {"minimal": "trio", "bold": "stage_pair", "photo": "poster_wall", "layered": "float_stack", "story": "stage"},
+}
+GROUP_SIZE = {"doc_stage": 1, "stage": 1, "pattern_field": 1, "stage_pair": 2, "duo": 2, "trio": 3, "poster_wall": 3, "phones": 3,
+              "float_stack": 4, "feed_grid": 9, "logo_tiles": 4, "logo_cards": 4}
+GROUP_MIN = {"stage_pair": 2, "duo": 2, "trio": 3, "poster_wall": 2, "float_stack": 2, "feed_grid": 3, "logo_tiles": 2, "logo_cards": 2}
+
+
+def _emit_grouped(b: "_Builder", type_: str, module: str, assets: list[AssetRecord], single: str = "stage", **meta) -> None:
+    for chunk in _chunks(assets, GROUP_SIZE.get(module, 1)):
+        if len(chunk) < GROUP_MIN.get(module, 1):
+            for a in chunk:
+                b.add(_type_for([a], type_), single, [a], **meta)
+        else:
+            b.add(_type_for(chunk, type_), module, chunk, **meta)
+
+
+def _emit(b: "_Builder", treatment: str, assets: list[AssetRecord]) -> None:
+    """Modules for one kind of material inside a folder section (concept-specific)."""
+    concept, inv = b.concept, b.inv
+    if treatment == "logo":
+        first, rest = assets[0], assets[1:]
+        if concept == "layered" and len(assets) >= 2:
+            b.add("logo", "logo_cards", assets[:4], logo_id=first.id, pattern_id=inv.patterns[0].id if inv.patterns else None)
+            rest = assets[4:]
+        elif concept == "story" and len(assets) >= 2:
+            rest = assets  # the chapter card introduces it: a grid of the whole system
+        elif concept == "photo" and rest and (first.analysis or {}).get("background") == "transparent" \
+                and (rest[0].analysis or {}).get("background") != "transparent":
+            b.add("logo", "logo_pair", [first, rest[0]], logo_id=first.id)
+            rest = rest[1:]
+        elif concept == "bold":
+            # Poster-scale identity: each lockup gets its own field.
+            for a in assets[:3]:
+                if a.effective_kind == "monogram":
+                    b.add("logo", "mark_feature", [a], title=b.ctx.title)
+                else:
+                    b.add("logo", "logo_hero", [a], logo_id=a.id)
+            rest = assets[3:]
+        else:
+            b.add("logo", "logo_hero", [first], logo_id=first.id)
+        for chunk in _chunks(rest, 4):
+            if len(chunk) == 1:
+                b.add("logo", "logo_hero", chunk, logo_id=chunk[0].id)
+            else:
+                b.add("logo_variations", "logo_tiles", chunk)
+        return
+    if treatment == "motion":
+        for a in assets:
+            b.add("motion", "video_stage", [a])
+        return
+    if treatment == "screen":
+        wide = [a for a in assets if a.aspect >= 1.0]
+        for a in wide:
+            b.add(_type_for([a], "website"), "browser", [a])
+        for chunk in _chunks([a for a in assets if a.aspect < 1.0], 3):
+            b.add(_type_for(chunk, "mobile"), "phones", chunk)
+        return
+    if treatment == "pattern":
+        module = GROUP_MODULE["pattern"][concept]
+        mark = inv.marks[0].id if inv.marks else (inv.logo.id if inv.logo else None)
+        if module == "pattern_field":
+            for i, a in enumerate(assets):
+                if concept == "minimal" and i:
+                    b.add("visual_language", "stage", [a])
+                else:
+                    b.add("visual_language", "pattern_field", [a], logo_id=mark, params={"badge": concept == "bold"})
+            return
+        _emit_grouped(b, "visual_language", module, assets)
+        return
+    if treatment in ("sheet", "social", "art"):
+        module = GROUP_MODULE[treatment][concept]
+        if treatment == "social" and len(assets) > 9:
+            module = "feed_grid"
+        if treatment == "art" and concept in ("bold", "photo"):
+            wide = [a for a in assets if a.effective_kind == "outdoor" and a.aspect >= 1.6]
+            for a in wide:
+                b.add(_type_for([a], "outdoor"), "fullbleed", [a])
+            assets = [a for a in assets if a not in wide]
+        default = {"sheet": "visual_language", "social": "social", "art": "campaign"}[treatment]
+        _emit_grouped(b, default, module, assets, single="phones" if treatment == "social" and concept != "story" else "stage")
+        return
+    # Photographs and photographed scenes.
+    rest = list(assets)
+    if concept == "layered":
+        trio = _pick_maskable(rest)
+        if trio:
+            b.add(_type_for(trio, "gallery"), "masked_trio", trio)
+            rest = [a for a in rest if a not in trio]
+    if concept == "story" and rest:
+        wide = next((a for a in rest if a.aspect >= 1.3), None)
+        if wide is not None:
+            b.add(_type_for([wide], "gallery"), "letterbox", [wide], params={"index": len(b.sections)})
+            rest.remove(wide)
+        if len(rest) >= 4:
+            b.add(_type_for(rest[:3], "gallery"), "filmstrip", rest[:3])
+            rest = rest[3:]
+    if rest:
+        _imagery_groups(b, rest, FOLDER_PHOTO_PATTERN[concept], "gallery")
+
+
+def _folder_story(b: "_Builder") -> None:
+    """Plan a concept section by section, following the designer's folders."""
+    from behance_studio.assets.folders import NON_SECTION_TYPES
+
+    ctx, inv, concept = b.ctx, b.inv, b.concept
+    groups = ctx.sections.groups()
+    tagline, rest_messages = _tagline(ctx)
+    b.messages_used.add(tagline)
+    hero = _folder_hero(b, groups)
+    cover = {"minimal": "cover_split" if hero is not None and b.rng.random() < 0.5 else "cover_logo", "bold": "cover_logo",
+             "photo": "cover_hero" if hero is not None else "cover_logo", "layered": "cover_split" if hero is not None else "cover_logo",
+             "story": "cover_hero" if hero is not None else "cover_logo"}[concept]
+    _common_opening(b, cover, hero, tagline)
+    b.used.clear()  # the cover image also appears in its own section
+    _statement(b, {"align": "center"} if concept == "story" else None)
+    has_palette = any(p.type == "palette" for p, _ in groups)
+    swatches = _swatches(ctx) if ctx.direction.palette.source == "brief" and not has_palette else []
+    identity_types = {"logo", "logo_variations", "logo_construction", "palette", "typography", "visual_language"}
+    pending_swatches = len(swatches) >= 2
+    for index, (placement, ids) in enumerate(groups):
+        assets = [inv.by_id[i] for i in ids if i in inv.by_id and "near-duplicate" not in inv.dropped.get(i, "")]
+        if not assets:
+            continue
+        if pending_swatches and placement.type not in identity_types and index > 0:
+            b.add("palette", "palette_columns" if concept != "layered" else "palette_circles", [], swatches=swatches)
+            pending_swatches = False
+        start = len(b.sections)
+        if concept == "story":
+            from behance_studio.layout.fitting import can_cover
+
+            lead = next((a for a in assets if _treatment(a) == "photo" and can_cover(a, 0.8)), None)
+            b.chapter_no += 1
+            if lead is not None:
+                b.add("custom", "chapter_spread", [lead], title=placement.title, params={"number": b.chapter_no}, chapter=True)
+                assets = [a for a in assets if a.id != lead.id]
+            else:
+                b.add("custom", "chapter", [], title=placement.title, params={"number": b.chapter_no}, chapter=True)
+        elif concept == "bold" and index and index % 3 == 0:
+            quote = b.message(rest_messages)
+            if quote:
+                b.add("brand_story", "quote_band", [], body=quote, exact_text=True)
+                start = len(b.sections)
+        order: list[str] = []
+        by_treatment: dict[str, list[AssetRecord]] = {}
+        for a in assets:
+            t = _treatment(a)
+            if t not in by_treatment:
+                order.append(t)
+            by_treatment.setdefault(t, []).append(a)
+        for t in order:
+            _emit(b, t, by_treatment[t])
+        # Every section of this folder carries its title and identity.
+        for sp in b.sections[start:]:
+            sp.meta["folder_section"] = placement.key
+            if sp.meta.get("chapter"):
+                continue
+            sp.title = placement.title
+            sp.meta["title_source"] = "folder" if placement.source == "folder" else "type"
+            if placement.type not in NON_SECTION_TYPES:
+                sp.type = placement.type
+    if pending_swatches:
+        b.add("palette", "palette_columns", [], swatches=swatches)
+    _closing(b, tagline if concept in ("bold", "story") else "")
+
+
 CONCEPT_PLANNERS = {"minimal": _minimal, "bold": _bold, "photo": _photo, "layered": _layered, "story": _story}
 
 
@@ -513,7 +739,10 @@ def direct(ctx: PlanningContext, concept: str, seed: int, creativity: float = 0.
         plan.notes.append("The project script fixes content and order; the concept sets the visual treatment.")
         return assign_stable_ids(plan)
     builder = _Builder(ctx, inv, concept, rng, writer)
-    CONCEPT_PLANNERS[concept](builder)
+    if ctx.by_folders:
+        _folder_story(builder)
+    else:
+        CONCEPT_PLANNERS[concept](builder)
     sections = builder.sections
     usable_ids = set(inv.by_id)
     used = {aid for s in sections for aid in s.asset_ids} | {s.meta.get("logo_id") for s in sections if s.meta.get("logo_id")}

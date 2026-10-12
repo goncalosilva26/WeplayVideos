@@ -24,7 +24,7 @@ from behance_studio.core.qtsupport import ensure_gui_application
 from behance_studio.core.settings import get_settings_store
 from behance_studio.core.tasks import ProgressEvent
 
-COMMANDS = {"create", "import", "generate", "list", "export", "trash", "restore", "purge", "demo", "doctor", "ai-check"}
+COMMANDS = {"create", "import", "generate", "list", "export", "trash", "restore", "purge", "demo", "doctor", "ai-check", "diagnose"}
 
 
 def _progress(event: ProgressEvent) -> None:
@@ -98,6 +98,9 @@ def cmd_generate(args) -> int:
 
     project = _open(args.project)
     settings = get_settings_store().settings
+    if getattr(args, "sections", None) and args.sections != project.config.section_source:
+        project.config.section_source = args.sections
+        project.save_config()
     request = GenerationRequest(
         families=[f.strip() for f in args.families.split(",")] if args.families else list(settings.families),
         count=args.count or 0,
@@ -117,7 +120,7 @@ def cmd_generate(args) -> int:
             if est.blocked_reason:
                 print(f"AI not used: {est.blocked_reason}")
                 ai = None
-            elif est.needs_confirmation and not args.allow_paid_ai:
+            elif est.needs_confirmation and not getattr(args, "allow_paid_ai", False):
                 print("AI not used: this provider may bill your account. Re-run with --allow-paid-ai to use it.")
                 ai = None
     result = generate(project, request, progress=_progress, ai_service=ai)
@@ -130,6 +133,8 @@ def cmd_generate(args) -> int:
         print(f"  {record.number:03d}  {record.name:<28} quality {record.quality:.2f}  issues {record.issues}")
     for family, seed, msg in result.failures:
         print(f"  FAILED {family} (seed {seed}): {msg}")
+    if result.diagnostics:
+        print(f"Section diagnostics: {result.diagnostics}")
     print(f"{len(result.versions)} proposal(s) in {result.elapsed:.1f}s")
     return 0 if result.versions else 1
 
@@ -211,7 +216,8 @@ def cmd_demo(args) -> int:
     from behance_studio.projects.library import ProjectLibrary
 
     entry = ProjectLibrary().recent(limit=1)[0]
-    return cmd_generate(argparse.Namespace(project=entry.path, families=None, count=0, seed=args.seed, creativity=None, no_previews=False, strict=False))
+    return cmd_generate(argparse.Namespace(project=entry.path, families=None, count=0, seed=args.seed, creativity=None, no_previews=False,
+                                           strict=False, allow_paid_ai=False, sections=None))
 
 
 def cmd_doctor(args) -> int:
@@ -252,6 +258,22 @@ def cmd_doctor(args) -> int:
     print(f"Data        {user_data_dir()}")
     print(f"Logs        {logs_dir()}")
     return 0 if browser else 1
+
+
+def cmd_diagnose(args) -> int:
+    """Show why every image is in its section (latest generation, or the current assignment)."""
+    project = _open(args.project)
+    latest = project.root / "Diagnostics" / "latest.txt"
+    if latest.exists() and not args.now:
+        print(latest.read_text(encoding="utf-8"))
+        return 0
+    from behance_studio.generation.diagnostics import build_report, render_text
+    from behance_studio.planning.assignment import assign_sections
+
+    assets = project.list_assets()
+    assignment = assign_sections(assets, project.config.section_source)
+    print(render_text(build_report(project, assets, assignment, [], "(no generation yet: current assignment only)")))
+    return 0
 
 
 def cmd_ai_check(args) -> int:
@@ -329,6 +351,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--strict", action="store_true", help="abort if the script references missing files")
     p.add_argument("--allow-paid-ai", action="store_true",
                    help="allow requests to a paid AI provider (the cost estimate is printed first; limits in Settings apply)")
+    p.add_argument("--sections", choices=["auto", "folders", "content"],
+                   help="auto (default): follow the section folders when the files are organised in them; "
+                        "content: let AI/heuristics regroup the images (saved for the project)")
     p.set_defaults(func=cmd_generate)
     p = sub.add_parser("list")
     p.add_argument("project")
@@ -352,6 +377,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("folder")
     p.add_argument("--seed", type=int, default=2026)
     p.set_defaults(func=cmd_demo)
+    p = sub.add_parser("diagnose", help="show where each image comes from, what AI said and which section it is in")
+    p.add_argument("project")
+    p.add_argument("--now", action="store_true", help="compute the current assignment instead of showing the last generation's report")
+    p.set_defaults(func=cmd_diagnose)
     p = sub.add_parser("ai-check", help="check free local AI (Ollama); --pull downloads the model, --test runs it for real")
     p.add_argument("--model", help="Ollama model to check (default: the one in Settings, else qwen3-vl:8b)")
     p.add_argument("--pull", action="store_true", help="download the model through Ollama if it is missing")

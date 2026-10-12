@@ -44,16 +44,7 @@ EXTRA_KINDS: dict[str, set[str]] = {
 # Section types that may show any material (no check).
 GENERIC = {"cover", "closing", "custom", "applications", "gallery", "final", "overview", "concept",
            "creative_direction", "brand_story", "intro"}
-# Where each asset type belongs when it has to move.
-HOME = {
-    "logo": "logo", "logo_variant": "logo_variations", "monogram": "logo_variations",
-    "palette": "palette", "typography": "typography", "pattern": "visual_language", "illustration": "illustration",
-    "packaging": "packaging", "product": "product", "poster": "campaign", "outdoor": "outdoor", "social": "social",
-    "stationery": "applications", "mockup": "applications", "editorial": "editorial",
-    "website": "website", "mobile": "mobile", "ui": "ui_screens",
-    "photo": "photography", "lifestyle": "photography", "portrait": "photography", "before_after": "before_after",
-    "video": "motion", "motion": "motion", "document": "applications", "other": "applications",
-}
+from behance_studio.planning.assignment import HOME  # noqa: E402 - one table for where each kind belongs
 
 
 def allowed_kinds(type_id: str) -> set[str] | None:
@@ -74,15 +65,19 @@ class FitReport:
     moved: list[tuple[str, str, str]] = field(default_factory=list)  # (asset id, from section title, to section title)
     retyped: list[tuple[str, str]] = field(default_factory=list)  # (old title, new title)
     kept: list[tuple[str, str]] = field(default_factory=list)  # (asset id, section title) — script/locked, reported only
+    reordered: bool = False
 
     @property
     def changed(self) -> bool:
-        return bool(self.moved or self.retyped)
+        return bool(self.moved or self.retyped or self.reordered)
 
     def notes(self, names: dict[str, str]) -> list[str]:
         out = []
         for aid, src, dst in self.moved[:8]:
-            out.append(f"Section check: “{names.get(aid, aid)}” moved from “{src}” to “{dst}”, where it belongs.")
+            if src == "(not planned)":
+                out.append(f"Section check: “{names.get(aid, aid)}” added to “{dst}” (the plan had left its section out).")
+            else:
+                out.append(f"Section check: “{names.get(aid, aid)}” moved from “{src}” to “{dst}”, where it belongs.")
         for old, new in self.retyped[:8]:
             out.append(f"Section check: “{old}” renamed “{new}” to match its images.")
         for aid, title in self.kept[:8]:
@@ -145,8 +140,20 @@ def _retitle(sp: SectionPlan, type_id: str, language: str) -> None:
         sp.title = section_type(type_id).title(language)
 
 
-def enforce_section_fit(plan: PresentationPlan, assets: dict) -> FitReport:
-    """Move mis-sectioned assets (see module docstring). Changes ``plan`` in place."""
+def enforce_section_fit(plan: PresentationPlan, assets: dict, assignment=None) -> FitReport:
+    """Move mis-sectioned assets (see module docstring). Changes ``plan`` in place.
+
+    With a folder-based ``assignment`` (planning.assignment) the designer's
+    folders decide: every image is kept in, or moved back to, the section of
+    its folder, and sections follow the folder order."""
+    if assignment is not None and getattr(assignment, "by_folders", False):
+        report = FitReport()
+        _enforce_folders(plan, assets, assignment, report)
+        if report.changed:
+            from behance_studio.planning.planner import assign_stable_ids
+
+            assign_stable_ids(plan)
+        return report
     from behance_studio.director.director import ALTERNATIVES
 
     report = FitReport()
@@ -221,3 +228,156 @@ def _refit_module(sp: SectionPlan, assets: dict, plan: PresentationPlan, alterna
 def _set_identity_meta(sp: SectionPlan, plan: PresentationPlan) -> None:
     if sp.meta.get("module") in ("logo_hero", "logo_tiles", "logo_cards", "logo_pair", "pattern_field") and plan.logo_asset_id:
         sp.meta.setdefault("logo_id", plan.logo_asset_id)
+
+
+# ------------------------------------------------------------ folder mode
+def _body(plan: PresentationPlan) -> list[SectionPlan]:
+    return [s for s in plan.sections if s.type not in ("cover", "closing")]
+
+
+def _enforce_folders(plan: PresentationPlan, assets: dict, asg, report: FitReport) -> None:
+    from behance_studio.assets.folders import NON_SECTION_TYPES
+    from behance_studio.director.director import ALTERNATIVES
+
+    placements = asg.placements
+    concept = any(s.meta.get("module") for s in plan.sections)
+    # 1. Each body section belongs to one folder section.
+    for sp in _body(plan):
+        keys = [placements[a].key for a in sp.asset_ids if a in placements]
+        if keys and not sp.meta.get("folder_section"):
+            sp.meta["folder_section"] = max(dict.fromkeys(keys), key=keys.count)
+    # 2. Take out images that belong to another folder section.
+    pending: dict[str, list[tuple[str, str]]] = {}
+    for sp in _body(plan):
+        key = sp.meta.get("folder_section")
+        if not key:
+            continue
+        wrong = [a for a in sp.asset_ids if a in placements and placements[a].key != key]
+        if not wrong:
+            continue
+        if sp.locked or sp.source == "script":
+            report.kept += [(a, sp.title) for a in wrong]
+            continue
+        sp.asset_ids = [a for a in sp.asset_ids if a not in wrong]
+        for a in wrong:
+            pending.setdefault(placements[a].key, []).append((a, sp.title))
+        if concept and sp.asset_ids:
+            _refit_module(sp, assets, plan, ALTERNATIVES)
+    # Sections left without the images their module needs disappear.
+    plan.sections = [s for s in plan.sections if s.asset_ids or not s.meta.get("module") or _needs_no_assets(s)]
+    # 3. Put them back where they belong.
+    for key, items in pending.items():
+        placement = placements[items[0][0]]
+        ids = [a for a, _ in items]
+        for target in [s for s in _body(plan) if s.meta.get("folder_section") == key and not s.meta.get("chapter")]:
+            room = _capacity(target) - len(target.asset_ids)
+            if room > 0 and ids:
+                take, ids = ids[:room], ids[room:]
+                target.asset_ids.extend(take)
+                report.moved += [(a, src, target.title) for a, src in items if a in take]
+        if not ids:
+            continue
+        positions = [i for i, s in enumerate(plan.sections) if s.meta.get("folder_section") == key]
+        insert_at = positions[-1] + 1 if positions else max(1, len(plan.sections) - 1)
+        kinds = [assets[a].effective_kind for a in ids if a in assets]
+        type_id = placement.type if placement.type not in NON_SECTION_TYPES else HOME.get(max(set(kinds), key=kinds.count), "gallery")
+        while ids:
+            module, chunk = _module_for(ids, assets, concept)
+            ids = [x for x in ids if x not in chunk]
+            new = SectionPlan(type=type_id, title=placement.title, asset_ids=list(chunk))
+            new.meta.update({"fit_moved": True, "folder_section": key})
+            if module:
+                new.meta.update({"module": module, "params": {}, "alternatives": ALTERNATIVES.get(module, [module])})
+                _set_identity_meta(new, plan)
+            plan.sections.insert(insert_at, new)
+            insert_at += 1
+            report.moved += [(a, src, new.title) for a, src in items if a in chunk]
+    # 3b. A folder section the plan left out entirely (e.g. an AI storyboard) is added back.
+    shown = {a for s in plan.sections for a in s.asset_ids}
+    for placement, ids in asg.groups():
+        if placement.source != "folder" or any(s.meta.get("folder_section") == placement.key for s in _body(plan)):
+            continue
+        missing = [a for a in ids if a not in shown and a in assets]
+        if not missing:
+            continue
+        kinds = [assets[a].effective_kind for a in missing]
+        type_id = placement.type if placement.type not in NON_SECTION_TYPES else HOME.get(max(set(kinds), key=kinds.count), "gallery")
+        insert_at = max(1, len(plan.sections) - (1 if plan.sections and plan.sections[-1].type == "closing" else 0))
+        while missing:
+            module, chunk = _module_for(missing, assets, concept)
+            missing = [x for x in missing if x not in chunk]
+            new = SectionPlan(type=type_id, title=placement.title, asset_ids=list(chunk))
+            new.meta.update({"fit_moved": True, "folder_section": placement.key})
+            if module:
+                new.meta.update({"module": module, "params": {}, "alternatives": ALTERNATIVES.get(module, [module])})
+                _set_identity_meta(new, plan)
+            plan.sections.insert(insert_at, new)
+            insert_at += 1
+            report.moved += [(a, "(not planned)", placement.title) for a in chunk]
+    # 4. Folder sections carry the designer's title — chapter cards included:
+    #    a chapter opens the folder section that follows it.
+    body = _body(plan)
+    for i, sp in enumerate(body):
+        if sp.meta.get("chapter") and not sp.meta.get("folder_section"):
+            nxt = next((x.meta["folder_section"] for x in body[i + 1:] if x.meta.get("folder_section")), None)
+            if nxt:
+                sp.meta["folder_section"] = nxt
+    titles = {p.key: p for p in placements.values()}
+    for sp in _body(plan):
+        p = titles.get(sp.meta.get("folder_section", ""))
+        if p is None or sp.locked or sp.source == "script":
+            continue
+        if sp.meta.get("chapter"):
+            sp.title = p.title
+            continue
+        if sp.title != p.title and not sp.exact_text:
+            if sp.asset_ids and sp.title and sp.meta.get("title_source") not in ("folder", "type"):
+                report.retyped.append((sp.title, p.title))
+            sp.title = p.title
+        if p.type not in NON_SECTION_TYPES and sp.type != p.type:
+            sp.type = p.type
+    # 5. Sections follow the folder order (text pauses travel with the next section).
+    report.reordered = _reorder(plan, asg) or report.reordered
+
+
+def _needs_no_assets(sp: SectionPlan) -> bool:
+    from behance_studio.ai.director import CATALOGUE, COVERS
+
+    spec = CATALOGUE.get(sp.meta.get("module", "")) or COVERS.get(sp.meta.get("module", ""))
+    return spec is None or spec.min == 0
+
+
+def _reorder(plan: PresentationPlan, asg) -> bool:
+    if any(s.locked or s.source == "script" for s in plan.sections):
+        return False
+    head = [s for s in plan.sections if s.type == "cover"]
+    tail = [s for s in plan.sections if s.type == "closing"]
+    body = _body(plan)
+    keyed = [asg.order_of(s.meta["folder_section"]) if s.meta.get("folder_section") else None for s in body]
+    ranks: list[float] = []
+    for i, rank in enumerate(keyed):
+        if rank is None:  # a text pause (statement, quote, swatches): stays before the next section
+            rank = next((r for r in keyed[i + 1:] if r is not None), float("inf"))
+        ranks.append(rank)
+    ordered = [s for _, _, s in sorted(zip(ranks, range(len(body)), body), key=lambda t: (t[0], t[1]))]
+    if ordered == body:
+        return False
+    plan.sections = head + ordered + tail
+    return True
+
+
+def placement_violations(plan: PresentationPlan, asset_sections: dict) -> list[tuple[str, str, str]]:
+    """(asset id, section title, intended section title) for every image shown
+    outside its intended section (cover and closing excepted)."""
+    out = []
+    for sp in plan.sections:
+        if sp.type in ("cover", "closing"):
+            continue
+        key = sp.meta.get("folder_section")
+        for a in sp.asset_ids:
+            want = asset_sections.get(a)
+            if want and key and want.get("key") != key:
+                out.append((a, sp.title, want.get("title", "")))
+            elif want and not key and not str(want.get("key", "")).startswith("kind:") and sp.source != "script":
+                out.append((a, sp.title, want.get("title", "")))
+    return out

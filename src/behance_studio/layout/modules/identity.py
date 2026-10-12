@@ -29,7 +29,14 @@ def module(name: str):
 
 
 def _logo_id(sp: SectionPlan) -> str | None:
-    return sp.meta.get("logo_id") or next((a for a in sp.asset_ids), None)
+    """The logo a section shows: its own image. ``meta.logo_id`` (the brand's
+    primary logo) is used only when the section has no image of its own or
+    includes it — a section never swaps its image for another one."""
+    meta = sp.meta.get("logo_id")
+    ids = list(sp.asset_ids)
+    if ids and meta not in ids:
+        return ids[0]
+    return meta or (ids[0] if ids else None)
 
 
 def _corner_labels(k: Kit, sb, bg: str, left: str, right: str, y: float, m: float) -> None:
@@ -337,7 +344,7 @@ def logo_pair(k: Kit, sp: SectionPlan, p: dict) -> Section:
     W = k.W
     H = k.px(p.get("height", 760))
     ids = list(sp.asset_ids)
-    lid = sp.meta.get("logo_id") or (ids[0] if ids else None)
+    lid = _logo_id(sp)
     panel = next((i for i in ids if i != lid and (k.asset(i).analysis or {}).get("background") not in (None, "transparent")), None)
     light_bg = k.logo_surface(lid, [ad.light, ad.primary, ad.surfaces[0]])
     sb = k.section(sp, light_bg, "logo_pair")
@@ -401,7 +408,7 @@ def logo_cards(k: Kit, sp: SectionPlan, p: dict) -> Section:
     ad = k.ad
     W = k.W
     ids = list(sp.asset_ids)
-    lid = sp.meta.get("logo_id") or (ids[0] if ids else None)
+    lid = _logo_id(sp)
     others = [i for i in ids if i != lid][:3]
     H = k.px(p.get("height", 980))
     bg = p.get("bg") or k.surface(options=[ad.primary, ad.light, ad.secondary])

@@ -203,9 +203,11 @@ def brand_messages(ctx: PlanningContext) -> list[str]:
     return [m for m in ctx.directives.brief.messages if detect_language(m, ctx.language) == ctx.language]
 
 
-def _asset_line(handle: str, group: str, a: AssetRecord) -> str:
+def _asset_line(handle: str, group: str, a: AssetRecord, section: str = "") -> str:
     info = a.analysis or {}
     bits = [handle, group, a.effective_kind, asset_nature(a), f"aspect {a.aspect:.2f}", f"strength {strength(a):.2f}"]
+    if section:
+        bits.insert(1, f"SECTION “{section}”")
     if info.get("background") == "transparent":
         bits.append("transparent")
     if info.get("text_fraction", 0) >= 0.03:
@@ -241,7 +243,15 @@ def shared_context(ctx: PlanningContext, groups: list[tuple[str, AssetRecord]], 
         "",
         "ASSETS (handle · group · kind · nature · aspect w/h · measured strength 0–1 · notes)",
     ]
-    lines += [_asset_line(handles[a.id], g, a) for g, a in groups]
+    placements = getattr(ctx.sections, "placements", {}) if ctx.by_folders else {}
+    lines += [_asset_line(handles[a.id], g, a, placements[a.id].title if a.id in placements else "") for g, a in groups]
+    if ctx.by_folders:
+        order = []
+        for placement, ids in ctx.sections.groups():
+            hs = [handles[i] for i in ids if i in handles]
+            if hs:
+                order.append(f"{len(order) + 1}. {placement.title}: {' '.join(hs)}")
+        lines += ["", "SECTIONS (fixed by the designer's folders, in this order):"] + order
     if sheet:
         lines.append("The first image is a contact sheet: every asset is labelled with its handle.")
     if references:
@@ -262,6 +272,9 @@ def shared_context(ctx: PlanningContext, groups: list[tuple[str, AssetRecord]], 
         "- fullbleed and cover_hero need landscape images; letterbox needs wide ones; masked_trio needs photographs that "
         "can be cropped to a circle, an arch and a landscape.",
         "- Use statement at most once. A closing section is added automatically.",
+        "- When SECTIONS are listed: every section you plan uses assets of ONE section only, and sections follow the "
+        "listed order. Within a section you choose the modules, sizes and the order of its images (you may split a "
+        "section into several modules). Never move an asset to another section.",
         "- About 6–14 sections after the cover; fewer for small projects. Quality over quantity.",
         "- In left_out, name assets you deliberately leave out with a short reason.",
     ]
@@ -495,7 +508,8 @@ def storyboard_to_plan(ctx: PlanningContext, inv: Inventory, groups: list[tuple[
             else:
                 chosen = combo
         if module in ("logo_hero", "logo_pair", "logo_cards", "mark_feature"):
-            extra["logo_id"] = logo_id
+            # The section shows its own logo image (never a substitute).
+            extra["logo_id"] = chosen[0].id if chosen else logo_id
         if module == "logo_cards" and logo_id and chosen and chosen[0].id != logo_id and inv.logo:
             chosen = [inv.logo] + [a for a in chosen if a.id != logo_id][:3]
         if module == "pattern_field":

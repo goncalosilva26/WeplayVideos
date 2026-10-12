@@ -204,6 +204,13 @@ class PlanningContext:
     directives: Directives
     direction: CreativeDirection
     issues: list[str] = field(default_factory=list)
+    # Validated asset -> section association (planning.assignment); when it
+    # follows the designer's folders, every planner keeps images in them.
+    sections: object | None = None
+
+    @property
+    def by_folders(self) -> bool:
+        return bool(self.sections is not None and getattr(self.sections, "by_folders", False))
 
     @property
     def language(self) -> str:
@@ -582,6 +589,43 @@ def _section(ctx: PlanningContext, type_id: str, assets: list[AssetRecord], writ
     return plan
 
 
+def _folder_sections(ctx: PlanningContext, prefs: PlanPreferences, writer: Copywriter) -> list[SectionPlan]:
+    """One section per section folder, in the designer's order.
+
+    Images never leave their folder's section; a folder larger than a section
+    continues in the next one (same title) instead of being trimmed or merged
+    with a neighbour."""
+    from behance_studio.assets.folders import NON_SECTION_TYPES
+    from behance_studio.planning.assignment import HOME
+
+    by_id = {a.id: a for a in usable_assets(ctx)}
+    sections: list[SectionPlan] = []
+    for placement, ids in ctx.sections.groups():
+        assets = [by_id[i] for i in ids if i in by_id]
+        if not assets:
+            continue
+        assets = sorted(assets, key=_natural_key)
+        kinds = [a.effective_kind for a in assets]
+        type_id = placement.type
+        if type_id in NON_SECTION_TYPES:  # a folder name the app does not know: compose by content, keep the name
+            type_id = HOME.get(max(set(kinds), key=kinds.count), "gallery")
+        size = max(1, prefs.max_per_section)
+        for n in range(0, len(assets), size):
+            chunk = order_section_assets(type_id, assets[n : n + size])
+            sp = _section(ctx, type_id, chunk, writer)
+            sp.title = placement.title
+            sp.meta["folder_section"] = placement.key
+            sp.meta["title_source"] = "folder" if placement.source == "folder" else "type"
+            if n:
+                sp.meta["continuation"] = True
+            if type_id == "palette":
+                sp.meta["swatches"] = [s.to_dict() for s in ctx.direction.palette.presentable]
+            if type_id == "typography" and ctx.direction.brand_fonts_known:
+                sp.meta["fonts"] = _font_meta(ctx, writer)
+            sections.append(sp)
+    return sections
+
+
 def plan_automatic(ctx: PlanningContext, prefs: PlanPreferences, seed: int) -> PresentationPlan:
     rng = random.Random(seed)
     writer = Copywriter(ctx.language)
@@ -595,9 +639,13 @@ def plan_automatic(ctx: PlanningContext, prefs: PlanPreferences, seed: int) -> P
         heroes = fits + [h for h in heroes if h not in fits]
     hero = heroes[prefs.hero_rank % len(heroes)] if heroes else None
     logo = _best_logo(usable)
-    # The hero opens the cover and is not repeated in the body sections.
-    reserved: set[str] = {hero.id} if hero is not None else set()
-    body_sections = _auto_sections(ctx, prefs, rng, writer, reserved=reserved)
+    if ctx.by_folders:
+        # Folder organisation decides the sections; the cover image also stays in its own section.
+        body_sections = _folder_sections(ctx, prefs, writer)
+    else:
+        # The hero opens the cover and is not repeated in the body sections.
+        reserved: set[str] = {hero.id} if hero is not None else set()
+        body_sections = _auto_sections(ctx, prefs, rng, writer, reserved=reserved)
 
     sections: list[SectionPlan] = []
     cover = SectionPlan(type="cover", title=ctx.title)

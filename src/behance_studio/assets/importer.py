@@ -167,7 +167,10 @@ def analyze_asset(project, asset: AssetRecord, force: bool = False) -> AssetReco
             cached = read_json(cache_file)
         except (ValueError, OSError):
             cached = None
-    keep = {k: asset.analysis[k] for k in ("browser_safe", "format", "exif_orientation", "dpi", "codec", "has_audio") if k in asset.analysis}
+    # Facts from import and results of other steps survive a re-analysis
+    # (the AI's answer and the section decision must never be wiped silently).
+    keep = {k: asset.analysis[k] for k in ("browser_safe", "format", "exif_orientation", "dpi", "codec", "has_audio", "ai", "section", "pair")
+            if k in asset.analysis}
     image = None
     if cached and cached.get("version") == ANALYSIS_VERSION:
         analysis = cached["analysis"]
@@ -194,7 +197,7 @@ def analyze_asset(project, asset: AssetRecord, force: bool = False) -> AssetReco
     if asset.kind_source != "ai" or force:
         result = classify(
             asset.filename,
-            asset.import_group,
+            asset.source_folder or asset.import_group,
             asset.media_type,
             asset.width,
             asset.height,
@@ -206,6 +209,8 @@ def analyze_asset(project, asset: AssetRecord, force: bool = False) -> AssetReco
         asset.kind_confidence = result.confidence
         asset.kind_source = "heuristic"
         asset.analysis["classification"] = {
+            "kind": result.kind,
+            "confidence": result.confidence,
             "reasons": result.reasons,
             "scores": result.scores,
             "pair_role": result.pair_role,
@@ -342,10 +347,11 @@ def import_paths(
     report = ImportReport()
     copy = project.config.copy_assets if copy is None else copy
     files = list(iter_files(Path(p) for p in paths))
+    dropped_folders = {Path(p) for p in paths if Path(p).is_dir()}
     total = max(1, len(files))
     existing_hashes = {a.sha256: a.filename for a in project.list_assets() if a.sha256}
     batch_hashes: dict[str, str] = {}
-    candidates: list[tuple[Path, Path, str, str]] = []
+    candidates: list[tuple[Path, Path, str, str, str]] = []
 
     progress(0.0, f"Scanning {len(files)} file(s)")
     for index, (path, root) in enumerate(files, start=1):
@@ -400,13 +406,21 @@ def import_paths(
         # marks reference material that is never placed in a presentation.
         if is_reference_path("", root.name) and not is_reference_path("", rel_group):
             rel_group = f"{root.name}/{rel_group}" if rel_group else root.name
-        candidates.append((path, Path(rel_group), media_type, sha))
+        # The designer's organisation, including the dropped folder's own name
+        # ("03 Packaging" when that folder was dropped on its own).
+        source_folder = ""
+        if root in dropped_folders:
+            try:
+                source_folder = path.parent.relative_to(root.parent).as_posix()
+            except ValueError:
+                source_folder = root.name
+        candidates.append((path, Path(rel_group), media_type, sha, source_folder))
         progress(0.15 * index / total, f"Scanning {path.name}")
 
     order = project.next_asset_order()
 
-    def process(item: tuple[Path, Path, str, str], position: int) -> AssetRecord:
-        path, rel_group, media_type, sha = item
+    def process(item: tuple[Path, Path, str, str, str], position: int) -> AssetRecord:
+        path, rel_group, media_type, sha, source_folder = item
         record = AssetRecord(
             id=new_id(),
             media_type=media_type,
@@ -414,6 +428,7 @@ def import_paths(
             rel_path="",
             source_path=str(path.resolve()),
             import_group=rel_group.as_posix() if str(rel_group) not in ("", ".") else "",
+            source_folder=source_folder,
             size_bytes=path.stat().st_size,
             sha256=sha,
             order=position,

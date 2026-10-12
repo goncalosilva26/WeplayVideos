@@ -48,6 +48,9 @@ class PresentationPlan:
     unused_asset_ids: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     script_driven: bool = False
+    # Validated asset -> section association used for this plan
+    # (asset id -> {"key", "title", "type", "source"}); see planning.assignment.
+    asset_sections: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         data = dataclasses.asdict(self)

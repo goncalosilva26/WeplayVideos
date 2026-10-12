@@ -13,6 +13,12 @@ export to PDF, images, an HTML package or a ZIP. A creative brief
 (`brief.txt`) and a detailed script (`GUIAO_PROJETO.txt`) remain optional
 advanced inputs.
 
+If the material is already organised in section folders (`01 Logo`,
+`03 Packaging/Cups`, `04 Campaign/Posters`…), every concept keeps each image
+in the section its folder names, in your order; analysis (offline or AI)
+only decides how an image is shown. *Section report* explains where every
+image went and why.
+
 | Concept | Art direction |
 | --- | --- |
 | **Minimal Editorial** | Light surfaces, large images framed by negative space, refined serif type, small tracked labels |
@@ -79,7 +85,8 @@ On Linux/macOS (development only): `./run.sh setup`, `./run.sh test`, `./run.sh`
 
 * Projects: `Documents\Behance Studio Projects\<Project>` by default (configurable).
   Each project folder is self-contained: `Assets`, `Versions`, `Exports`,
-  `Trash`, `Cache`, `project.json` and `project.db`. Original files are never
+  `Trash`, `Cache`, `Diagnostics` (section reports), `project.json` and
+  `project.db`. Original files are never
   modified; by default they are copied into `Assets`.
 * Settings, the recent-projects library and logs: `%APPDATA%\BehanceStudio`.
 * API keys (only if you configure AI): Windows Credential Manager. Never in

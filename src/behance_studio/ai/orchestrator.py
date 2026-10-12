@@ -105,6 +105,7 @@ class AIService:
         self.log: list[str] = []
         self.failed: str | None = None  # set after a provider failure: no further requests this run
         self.director_off: str | None = None
+        self.stats = {"analysed": 0, "from_cache": 0, "failed": 0}
         ai = settings.ai
         prices = resolve_prices(provider.kind, provider.model, provider.is_local, ai)
         self.meter = SpendMeter(provider.kind, provider.model, prices, provider.may_bill and not provider.is_local,
@@ -201,21 +202,34 @@ class AIService:
         return ImagePart(buf.getvalue(), "image/jpeg")
 
     def _classify_one(self, asset, include_names: bool = True) -> dict[str, Any] | None:
-        """Design purpose of one asset from a small preview (cached)."""
-        from behance_studio.ai import vision
+        """Design purpose of one asset, from the image itself (a small preview).
 
-        key = self._key("classify", vision.PROMPT_VERSION, asset.sha256, include_names)
-        cached = self._cache_get("classify", key)
-        if cached is not None:
-            return cached
-        prompt = vision.prompt(asset.filename, asset.import_group, include_names)
-        data = self.provider.complete_json(vision.SYSTEM, prompt, [self._preview(asset)], max_tokens=240, schema=vision.SCHEMA, purpose="classify")
-        result = vision.normalise(data)
-        if result is None:
-            return None
-        result["model"] = self.provider.model
-        self._cache_put("classify", key, result)
-        return result
+        Cached by image content + model + prompt version + the folder/file-name
+        context in the prompt (shared by all projects): an unchanged image is
+        never analysed twice. ``None`` = the model's answer was unusable."""
+        from behance_studio.ai import vision
+        from behance_studio.ai.cache import ANALYSIS_CACHE
+
+        folder = asset.source_folder or asset.import_group
+        key = self._key("classify", vision.PROMPT_VERSION, asset.sha256, include_names, folder if include_names else "",
+                        asset.filename if include_names else "")
+        with ANALYSIS_CACHE.lock(key):
+            cached = ANALYSIS_CACHE.get(key) or self._cache_get("classify", key)
+            if cached is not None:
+                self.stats["from_cache"] += 1
+                return {**cached, "from_cache": True}
+            prompt = vision.prompt(asset.filename, folder, include_names)
+            image = self._preview(asset)  # the actual pixels, re-encoded (no metadata)
+            data = self.provider.complete_json(vision.SYSTEM, prompt, [image], max_tokens=240, schema=vision.SCHEMA, purpose="classify")
+            self.stats["analysed"] += 1
+            result = vision.normalise(data)
+            if result is None:
+                log.info("AI answer for %s was unusable: %s", asset.filename, str(data)[:200])
+                return None
+            result["model"] = self.provider.model
+            ANALYSIS_CACHE.put(key, result)
+            self._cache_put("classify", key, result)
+            return result
 
     def classify_assets(self, project, assets, token: CancelToken | None = None, progress: Callable[[float, str], None] = lambda f, m: None) -> bool:
         if not (self.settings.ai.use_for_classification and self.images_allowed):
@@ -247,18 +261,26 @@ class AIService:
                         break
                     except ProviderError as exc:
                         failures += 1
+                        self.stats["failed"] += 1
                         if failures >= 3 and done <= 3:  # failing from the start: stop early
                             for f in futures:
                                 f.cancel()
                             self.failed = exc.message
                             raise
                         log.warning("AI classification failed for %s: %s", asset.filename, exc.message)
+                        self._record_unanalysed(asset, f"not run: {exc.message} (the measured type is used)")
+                        changed.append(asset)
                         continue
                     except Exception as exc:  # noqa: BLE001 - one unreadable preview must not stop the rest
                         log.warning("AI classification skipped %s: %s", asset.filename, exc)
+                        self._record_unanalysed(asset, f"not run: the preview could not be read ({exc}); the measured type is used")
+                        changed.append(asset)
                         continue
                     progress(done / len(todo), f"AI recognised {done} of {len(todo)}")
-                    if result and self._apply_classification(asset, result):
+                    if result is None:
+                        self._record_unanalysed(asset, "not applied: the model's answer was not one of the known types; the measured type is used")
+                        changed.append(asset)
+                    elif self._apply_classification(asset, result):
                         changed.append(asset)
             finally:
                 pool.shutdown(wait=True, cancel_futures=True)
@@ -267,38 +289,80 @@ class AIService:
             from behance_studio.assets.importer import finalize_relationships
 
             finalize_relationships(project, changed)
-        self.log.append(f"AI asset recognition: {len(changed)} of {len(todo)} asset type(s) updated.")
+        retyped = sum(1 for a in changed if (a.analysis.get("ai") or {}).get("applied") and a.kind_source == "ai")
+        self.log.append(f"AI asset recognition ({self.provider.model}): {self.stats['analysed']} image(s) analysed, "
+                        f"{self.stats['from_cache']} from cache, {self.stats['failed']} failed; {retyped} type(s) set by AI.")
         return bool(changed)
 
     def _classify_todo(self, assets) -> list:
         return [a for a in assets if a.is_visual and not a.excluded and not a.user_kind and a.sha256
                 and a.effective_kind != "reference"][:MAX_IMAGES_PER_RUN]
 
-    @staticmethod
-    def _apply_classification(asset, result: dict[str, Any]) -> bool:
-        from behance_studio.ai.vision import implausible
+    def _apply_classification(self, asset, result: dict[str, Any]) -> bool:
+        return self.apply_classification(asset, result, folder_authority=getattr(self.project.config, "section_source", "auto") != "content")
 
+    @staticmethod
+    def apply_classification(asset, result: dict[str, Any], folder_authority: bool = True) -> bool:
+        """Apply the model's answer to the asset's *type* and record why.
+
+        Every answer is stored with an explicit decision (never dropped
+        silently). The type decides how an image is shown; the section it
+        belongs to is decided separately (planning.assignment) — in an
+        organised project by its folder, which the AI never overrides."""
+        from behance_studio.ai.vision import implausible
+        from behance_studio.assets.folders import FOLDER_KINDS, section_type_of_path
+
+        result = {k: v for k, v in result.items() if k not in ("decision", "applied", "rejected")}
+        before = asset.effective_kind
         reason = implausible(result, asset)
-        if reason:
-            # Kept for transparency, never applied: a wrong label must not move
-            # an image into the wrong section.
-            asset.analysis["ai"] = {**result, "rejected": reason}
-            return True
+        applied = False
+        folder = asset.source_folder or asset.import_group
+        folder_type = section_type_of_path(folder)
+        allowed = FOLDER_KINDS.get(folder_type or "", set())
+        if asset.user_kind:
+            decision = f"not applied: you set the type to {asset.user_kind.replace('_', ' ')}"
+        elif reason:
+            decision = f"rejected: {reason}"
+            result["rejected"] = reason
+        elif result["confidence"] < MIN_CONFIDENCE:
+            decision = f"not applied: the model was unsure ({result['confidence']:.2f} < {MIN_CONFIDENCE})"
+        elif allowed and result["kind"] not in allowed and folder_authority:
+            # The designer filed it in a section folder: the model may refine the type
+            # within that section (packaging / product / mockup…), never contradict it.
+            decision = (f"not applied: '{result['kind'].replace('_', ' ')}' contradicts the folder "
+                        f"'{folder.split('/')[-1]}' ({folder_type.replace('_', ' ')})")
+        else:
+            applied = True
+            decision = "applied (agrees with the measured type)" if result["kind"] == asset.kind else \
+                f"applied (the measured guess was {asset.kind.replace('_', ' ')})"
+        result["decision"] = decision
+        result["applied"] = applied
+        result["sha256"] = asset.sha256  # which image this answer is about
         asset.analysis["ai"] = result
         if result.get("description") and not asset.description:
             asset.description = result["description"]
         if result.get("tags"):
             asset.tags = sorted(set(asset.tags or []) | set(result["tags"]))
-        heuristic_conf = asset.kind_confidence or 0.0
-        ai_conf = result["confidence"]
-        if ai_conf < MIN_CONFIDENCE:
-            return bool(result.get("description"))
-        if result["kind"] != asset.kind and (heuristic_conf < 0.85 or ai_conf > heuristic_conf):
+        if applied and result["kind"] != asset.kind:
             asset.kind = result["kind"]
-            asset.kind_confidence = ai_conf
+            asset.kind_confidence = result["confidence"]
             asset.kind_source = "ai"
             asset.roles = infer_roles(asset)
+        elif applied:  # the model confirmed the measured type
+            asset.kind_confidence = max(asset.kind_confidence or 0.0, result["confidence"])
+            asset.kind_source = "ai"
+        log.info("AI type for %s: %s (%.2f) — %s [type now %s, was %s]", asset.filename, result["kind"], result["confidence"],
+                 decision, asset.effective_kind, before)
         return True
+
+    @staticmethod
+    def _record_unanalysed(asset, decision: str) -> None:
+        previous = (asset.analysis or {}).get("ai") or {}
+        if previous.get("kind") and previous.get("sha256", asset.sha256) == asset.sha256:
+            # An earlier answer about this same image stays in force; only the failed attempt is noted.
+            asset.analysis["ai"] = {**previous, "last_attempt": decision}
+            return
+        asset.analysis["ai"] = {"kind": None, "decision": decision, "applied": False}
 
     # ---------------------------------------------------- creative brief
     def refine_direction(self, project, directives, direction) -> bool:

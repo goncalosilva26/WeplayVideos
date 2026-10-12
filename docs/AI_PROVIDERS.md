@@ -78,8 +78,12 @@ is not repeated on the recomposed version, and the notes say so. The score
   Settings.
 * **Caching.** Every answer is cached by content hash in
   `<project>\Cache\ai\`: regenerating with the same material and seed sends
-  nothing. On Anthropic, the context shared by the five concept requests is
-  marked for prompt caching.
+  nothing. Image recognition is also cached across projects in
+  `%APPDATA%\BehanceStudio\ai-cache\` (key: image SHA-256, provider, model,
+  prompt version, file and folder name), so an image is analysed again only
+  when the image, the model or the analysis prompt changes. On Anthropic,
+  the context shared by the five concept requests is marked for prompt
+  caching.
 * **Typical cost** (Butter & Bean fixture, 25 assets, five concepts, critique
   on, list prices): about $1.05 with `claude-opus-5-5` (the default model),
   roughly half with `claude-sonnet-5-5`, a few cents with `claude-haiku-5-5`.

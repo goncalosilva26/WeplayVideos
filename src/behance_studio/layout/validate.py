@@ -246,19 +246,29 @@ def validate_presentation(
             name = assets[aid].filename if aid in assets else aid
             issues.append(Issue("warning", "repeated_image", f"'{name}' is used {count} times."))
 
-    # Images in a section they do not belong to (see planning.fit).
+    # Images in a section they do not belong to (see planning.assignment / planning.fit).
     if plan is not None:
-        from behance_studio.planning.fit import mismatches
+        from behance_studio.planning.fit import mismatches, placement_violations
 
-        kinds = {aid: a.effective_kind for aid, a in assets.items()}
         by_plan = {s.plan_id: s for s in presentation.sections if s.plan_id}
-        for sp in plan.sections:
-            for aid in mismatches(sp, kinds):
-                shown = by_plan.get(sp.id)
+        by_folders = any(not str(v.get("key", "")).startswith("kind:") for v in (plan.asset_sections or {}).values())
+        if by_folders:
+            # The designer's folders decide: check against the validated assignment.
+            for aid, title, wanted in placement_violations(plan, plan.asset_sections):
+                sp = next((x for x in plan.sections if aid in x.asset_ids and x.title == title), None)
+                shown = by_plan.get(sp.id) if sp else None
                 name = assets[aid].filename if aid in assets else aid
-                issues.append(Issue("warning", "section_mismatch",
-                                    f"'{name}' ({kinds[aid].replace('_', ' ')}) is in the section '{sp.title}'.",
-                                    shown.id if shown else "", "", sp.title))
+                issues.append(Issue("warning", "section_mismatch", f"'{name}' belongs to '{wanted}' but is shown in '{title}'.",
+                                    shown.id if shown else "", "", title))
+        else:
+            kinds = {aid: a.effective_kind for aid, a in assets.items()}
+            for sp in plan.sections:
+                for aid in mismatches(sp, kinds):
+                    shown = by_plan.get(sp.id)
+                    name = assets[aid].filename if aid in assets else aid
+                    issues.append(Issue("warning", "section_mismatch",
+                                        f"'{name}' ({kinds[aid].replace('_', ' ')}) is in the section '{sp.title}'.",
+                                        shown.id if shown else "", "", sp.title))
 
     planned = 0
     placed = 0
@@ -379,16 +389,32 @@ def layout_distance(a: Presentation, b: Presentation) -> float:
 
     A pure colour variation of the same layout can score at most 0.2 (the
     background term), so values above 0.25 imply structural differences.
-    Compares sections that show the same plan content: where the same assets
-    are placed (IoU of their frames), section heights, backgrounds and the
-    largest text size. Colour-only variations score low by construction.
+    Sections are paired by plan content (or by the images they show) and
+    compared: where the same assets are placed (IoU of their frames), section
+    heights, backgrounds and the largest text size. Image sections that have
+    no counterpart (the other layout groups those images differently) count
+    as structurally different (0.8). Colour-only variations score low by
+    construction because every section pairs up.
     """
     by_plan_b = {s.plan_id: s for s in b.sections if s.plan_id}
+    # Sections are also paired by the images they show: inserting a chapter
+    # card shifts plan ids, but the same images composed differently must
+    # still be compared.
+    by_assets_b: dict[frozenset, Section] = {}
+    for s in b.sections:
+        key = frozenset(s.asset_ids())
+        if key and key not in by_assets_b:
+            by_assets_b[key] = s
     diffs: list[float] = []
+    paired_b: set[int] = set()
+    regrouped = 0  # image sections of ``a`` whose images ``b`` groups differently
     for sa in a.sections:
-        sb_ = by_plan_b.get(sa.plan_id)
+        sb_ = by_plan_b.get(sa.plan_id) or by_assets_b.get(frozenset(sa.asset_ids()))
         if sb_ is None:
+            if sa.asset_ids():
+                regrouped += 1
             continue
+        paired_b.add(id(sb_))
         media_a = {x.asset_id: x for x in sa.blocks if x.asset_id}
         media_b = {x.asset_id: x for x in sb_.blocks if x.asset_id}
         common = set(media_a) & set(media_b)
@@ -412,4 +438,8 @@ def layout_distance(a: Presentation, b: Presentation) -> float:
         pa, pb = title_pos(sa), title_pos(sb_)
         title = min(1.0, math.dist(pa, pb) * 2)
         diffs.append(0.3 * geo + 0.1 * height + 0.2 * bg + 0.15 * text + 0.15 * deco + 0.1 * title)
-    return sum(diffs) / len(diffs) if diffs else 1.0
+    regrouped += sum(1 for s in b.sections if s.asset_ids() and id(s) not in paired_b)
+    # Showing the same images in different groupings is a structural
+    # difference; a pure recolouring pairs every section and stays <= 0.2.
+    total = len(diffs) + regrouped
+    return (sum(diffs) + 0.8 * regrouped) / total if total else 1.0

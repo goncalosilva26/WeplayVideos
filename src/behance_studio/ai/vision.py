@@ -93,7 +93,8 @@ SCHEMA: dict[str, Any] = {
 def prompt(filename: str, folder: str, include_names: bool = True) -> str:
     kinds = "\n".join(f"- {k}: {PURPOSE_HINTS.get(k, v)}" for k, v in AI_KINDS.items())
     shows = "\n".join(f"- {k}: {v}" for k, v in PRESENTATIONS.items())
-    names = f"File name: {filename}\nFolder: {folder or '-'}\n" if include_names else "File name: (hidden)\n"
+    names = (f"File name: {filename}\nFolder (the designer's own organisation): {folder or '-'}\n" if include_names
+             else "File name: (hidden)\n")
     return (
         f"{names}"
         f"Allowed kinds (design purpose):\n{kinds}\n"

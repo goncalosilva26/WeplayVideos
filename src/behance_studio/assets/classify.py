@@ -244,6 +244,23 @@ def classify(
     if "before_after" in combined and pair_role is None and "before_after" not in kw:
         combined.pop("before_after")
 
+    # A folder that names a section ("03 Packaging", "Social Media") is the
+    # designer's own classification: the kind must be one that belongs there.
+    # (Generic camera names such as IMG_4021 must not outweigh it.)
+    from behance_studio.assets.folders import FOLDER_KINDS, PRIMARY_KIND, section_type_of_path
+
+    folder_reason = ""
+    folder_type = section_type_of_path(folder)
+    moving = media_type == MEDIA_VIDEO or (media_type == MEDIA_GIF and animated)
+    if folder_type in FOLDER_KINDS and not moving:
+        allowed = FOLDER_KINDS[folder_type]
+        if not any(k in allowed for k in combined) and PRIMARY_KIND.get(folder_type):
+            combined[PRIMARY_KIND[folder_type]] = 0.45
+        if combined and max(combined, key=combined.get) not in allowed:
+            top = max(combined, key=combined.get)
+            folder_reason = f"folder '{folder}' names the {folder_type.replace('_', ' ')} section (not {top.replace('_', ' ')})"
+            combined = {k: v for k, v in combined.items() if k in allowed}
+
     if not combined:
         fallback = "photo" if analysis.get("n90_colors", 0) > 120 else "other"
         return Classification(fallback, 0.15, ["no strong signals"], {}, None)
@@ -253,4 +270,7 @@ def classify(
     second = ranked[1][1] if len(ranked) > 1 else 0.0
     confidence = max(0.05, min(0.95, best * 0.75 + (best - second) * 0.6))
     reasons = kw_reasons + vis_reasons
+    if folder_reason:
+        reasons = [folder_reason] + reasons
+        confidence = max(confidence, 0.7)
     return Classification(best_kind, round(confidence, 3), reasons[:6], {k: round(v, 3) for k, v in ranked[:5]}, pair_role)

@@ -71,6 +71,10 @@ class AssetRecord:
     rel_path: str  # relative to project root (POSIX separators) or absolute when referenced
     source_path: str = ""
     import_group: str = ""  # relative folder within the imported folder
+    # Folder path as the designer organised it, including the name of the
+    # folder that was dropped/imported (e.g. "Butter & Bean/03 Packaging/Cups").
+    # Empty for files imported one by one. Drives folder-based sections.
+    source_folder: str = ""
     size_bytes: int = 0
     sha256: str = ""
     phash: str = ""
@@ -193,6 +197,10 @@ class ProjectConfig:
     script_file: str = "GUIAO_PROJETO.txt"
     copy_assets: bool = True
     description: str = ""
+    # Where sections come from: "auto" (the designer's folders when the files
+    # are organised in folders, otherwise content analysis), "folders", or
+    # "content" (AI/heuristics reorganise — only when the user asks for it).
+    section_source: str = "auto"
 
     def to_dict(self) -> dict[str, Any]:
         return dataclasses.asdict(self)
