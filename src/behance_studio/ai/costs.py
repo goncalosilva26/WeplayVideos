@@ -77,7 +77,7 @@ class Prices:
 
 def resolve_prices(kind: str, model: str, is_local: bool, ai_settings=None) -> Prices | None:
     """Prices for this provider/model, or None when unknown."""
-    if kind == "local" and is_local:
+    if kind in ("local", "ollama") and is_local:
         return Prices(0.0, 0.0, "free")
     if ai_settings is not None:
         pin = float(getattr(ai_settings, "price_input_per_mtok", 0.0) or 0.0)
@@ -89,7 +89,7 @@ def resolve_prices(kind: str, model: str, is_local: bool, ai_settings=None) -> P
         for name, (pin, pout) in KNOWN_PRICES.items():
             if base == name or base.startswith(name + "-"):  # dated snapshots of the same model
                 return Prices(pin, pout, "built-in")
-    if kind == "local":  # a "local" server on a remote address: unknown, treat as paid
+    if kind in ("local", "ollama"):  # a server on a remote address: unknown, treat as paid
         return None
     return None
 
@@ -116,6 +116,8 @@ class Usage:
     def from_response(cls, data: dict[str, Any]) -> "Usage":
         u = data.get("usage") if isinstance(data, dict) else None
         if not isinstance(u, dict):
+            if isinstance(data, dict) and ("prompt_eval_count" in data or "eval_count" in data):  # Ollama native API
+                return cls._ollama(data)
             return cls()
 
         def num(key: str) -> int:
@@ -129,6 +131,13 @@ class Usage:
         if "prompt_tokens" in u or "completion_tokens" in u:  # OpenAI-compatible
             return cls(num("prompt_tokens"), num("completion_tokens"), 0, 0, True)
         return cls()
+
+    @classmethod
+    def _ollama(cls, data: dict[str, Any]) -> "Usage":
+        try:
+            return cls(max(0, int(data.get("prompt_eval_count") or 0)), max(0, int(data.get("eval_count") or 0)), 0, 0, True)
+        except (TypeError, ValueError):
+            return cls()
 
     def cost(self, prices: Prices | None) -> float | None:
         if prices is None:

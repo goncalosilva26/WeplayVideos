@@ -52,14 +52,16 @@ from behance_studio.core.logging_setup import get_logger
 log = get_logger(__name__)
 
 DEFAULT_URLS = {
+    "ollama": "http://localhost:11434",
     "openai": "https://api.openai.com/v1",
     "anthropic": "https://api.anthropic.com",
     "local": "http://localhost:11434/v1",
 }
-DEFAULT_MODELS = {"openai": "gpt-4.1-mini", "anthropic": "claude-opus-5-5", "local": "llava"}
+DEFAULT_MODELS = {"ollama": "qwen3-vl:8b", "openai": "gpt-4.1-mini", "anthropic": "claude-opus-5-5", "local": "qwen3-vl-8b"}
 # Suggested Anthropic models (shown in Settings with their list prices).
 ANTHROPIC_MODELS = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-1"]
 CLOUD_PROVIDERS = ("openai", "anthropic")
+LOCAL_PROVIDERS = ("local", "ollama")
 ANTHROPIC_VERSION = "2023-06-01"
 USER_AGENT = f"BehanceStudio/{__version__}"
 
@@ -127,6 +129,7 @@ def is_private_url(url: str) -> bool:
 
 class Provider:
     kind = "base"
+    parallel = 3  # concurrent requests that make sense for this provider
 
     def __init__(self, base_url: str, model: str, api_key: str | None, timeout: float = 60.0, max_retries: int = 2) -> None:
         self.base_url = base_url.rstrip("/")
@@ -152,7 +155,7 @@ class Provider:
     @property
     def is_local(self) -> bool:
         """True when requests stay on this machine or local network."""
-        return self.kind == "local" and is_private_url(self.base_url)
+        return self.kind in LOCAL_PROVIDERS and is_private_url(self.base_url)
 
     @property
     def may_bill(self) -> bool:
@@ -204,7 +207,8 @@ class Provider:
         raise NotImplementedError
 
     def complete(self, system: str, prompt: str, images: list[ImagePart] | None = None, max_tokens: int = 600, temperature: float = 0.2,
-                 *, schema: dict[str, Any] | None = None, effort: str = "low", purpose: str = "request", shared: str = "") -> str:
+                 *, schema: dict[str, Any] | None = None, effort: str = "low", purpose: str = "request", shared: str = "",
+                 json_mode: bool = False) -> str:
         """Send one request and return the answer text.
 
         ``shared`` is context that repeats across several requests of a run
@@ -214,7 +218,7 @@ class Provider:
         est = self.estimate(system, shared + prompt, images, max_tokens, effort=effort, purpose=purpose)
         if self.meter is not None:
             self.meter.authorize(est)
-        data = self._send(system, prompt, images or [], max_tokens, temperature, schema, effort, shared)
+        data = self._send(system, prompt, images or [], max_tokens, temperature, schema, effort, shared, json_mode=json_mode or schema is not None)
         self.last_usage = Usage.from_response(data)
         if self.meter is not None:
             self.meter.record(self.last_usage, est)
@@ -222,7 +226,8 @@ class Provider:
 
     def complete_json(self, system: str, prompt: str, images: list[ImagePart] | None = None, max_tokens: int = 600,
                       *, schema: dict[str, Any] | None = None, effort: str = "low", purpose: str = "request", shared: str = "") -> dict[str, Any]:
-        text = self.complete(system, prompt, images, max_tokens=max_tokens, temperature=0.1, schema=schema, effort=effort, purpose=purpose, shared=shared)
+        text = self.complete(system, prompt, images, max_tokens=max_tokens, temperature=0.1, schema=schema, effort=effort, purpose=purpose,
+                             shared=shared, json_mode=True)
         data = extract_json(text)
         if not isinstance(data, dict):
             raise ProviderError("The AI provider did not return the expected structured answer.", text[:400])
@@ -240,7 +245,7 @@ class Provider:
         return RequestEstimate(purpose, text_tokens(system, prompt) + img + 12, answer + think, max_tokens + headroom, len(images or []))
 
     def _send(self, system: str, prompt: str, images: list[ImagePart], max_tokens: int, temperature: float,
-              schema: dict[str, Any] | None, effort: str, shared: str) -> dict[str, Any]:
+              schema: dict[str, Any] | None, effort: str, shared: str, json_mode: bool = False) -> dict[str, Any]:
         raise NotImplementedError
 
     def _text(self, data: dict[str, Any]) -> str:
@@ -273,7 +278,7 @@ class OpenAICompatibleProvider(Provider):
         return sorted(str(m.get("id", "")) for m in data.get("data", []) if isinstance(m, dict))
 
     def _send(self, system: str, prompt: str, images: list[ImagePart], max_tokens: int, temperature: float,
-              schema: dict[str, Any] | None, effort: str, shared: str) -> dict[str, Any]:
+              schema: dict[str, Any] | None, effort: str, shared: str, json_mode: bool = False) -> dict[str, Any]:
         text = f"{shared}\n\n{prompt}" if shared else prompt
         content: list[dict[str, Any]] | str
         if images:
@@ -302,6 +307,7 @@ class OpenAICompatibleProvider(Provider):
 
 class LocalProvider(OpenAICompatibleProvider):
     kind = "local"
+    parallel = 1  # local servers answer one request at a time
 
 
 class AnthropicProvider(Provider):
@@ -354,7 +360,7 @@ class AnthropicProvider(Provider):
         return payload
 
     def _send(self, system: str, prompt: str, images: list[ImagePart], max_tokens: int, temperature: float,
-              schema: dict[str, Any] | None, effort: str, shared: str) -> dict[str, Any]:
+              schema: dict[str, Any] | None, effort: str, shared: str, json_mode: bool = False) -> dict[str, Any]:
         payload = self._payload(system, prompt, images, max_tokens, temperature, schema, effort, shared)
         try:
             return self._request("POST", self._path("/messages"), payload)
@@ -379,7 +385,112 @@ class AnthropicProvider(Provider):
         return text
 
 
+class OllamaProvider(Provider):
+    """Ollama's native API (``/api/chat``): free and local.
+
+    * JSON answers use Ollama's structured outputs (``format`` = the JSON
+      schema), so small local models return parseable, schema-shaped JSON.
+    * The context window (``num_ctx``) is sized per request: Ollama's
+      default is too small for the creative-direction prompt.
+    * Models that can "think" (e.g. some Qwen3-VL builds) are asked not to,
+      which keeps answers fast and within the token budget.
+    * The model stays loaded for 15 minutes between requests (``keep_alive``).
+    """
+
+    kind = "ollama"
+    parallel = 1  # Ollama answers one request at a time on a single GPU
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        if self.base_url.endswith("/v1"):
+            self.base_url = self.base_url[:-3]
+        self._caps: list[str] | None = None
+
+    def capabilities(self) -> list[str]:
+        if self._caps is None:
+            try:
+                info = self._request("POST", "/api/show", {"model": self.model})
+                self._caps = [str(c).lower() for c in info.get("capabilities") or []]
+            except ProviderError:
+                self._caps = []
+        return self._caps
+
+    def list_models(self) -> list[str]:
+        data = self._request("GET", "/api/tags")
+        return sorted(str(m.get("name") or m.get("model") or "") for m in data.get("models", []) if isinstance(m, dict))
+
+    def test_connection(self) -> str:
+        from behance_studio.ai.ollama import detect
+
+        status = detect(self.base_url, self.model, timeout=5.0)
+        if not status.ready:
+            from behance_studio.ai.ollama import setup_steps
+
+            raise ProviderError(status.summary(), "\n".join(setup_steps(status)))
+        return f"{status.summary()} Runs on this computer: free, nothing leaves your PC."
+
+    @staticmethod
+    def context_for(prompt_chars: int, images: list[ImagePart], answer_tokens: int) -> int:
+        image_tokens = 0
+        for im in images:
+            w, h = im.size()
+            image_tokens += int((w / 28) * (h / 28)) + 16  # vision patches (generous)
+        need = int(prompt_chars / 3.2) + image_tokens + answer_tokens + 512
+        size = 8192
+        while size < need and size < 32768:
+            size *= 2
+        return size
+
+    def _send(self, system: str, prompt: str, images: list[ImagePart], max_tokens: int, temperature: float,
+              schema: dict[str, Any] | None, effort: str, shared: str, json_mode: bool = False) -> dict[str, Any]:
+        text = f"{shared}\n\n{prompt}" if shared else prompt
+        user: dict[str, Any] = {"role": "user", "content": text}
+        if images:
+            user["images"] = [im.b64() for im in images]
+        answer = max(64, int(max_tokens * 1.5))
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": [{"role": "system", "content": system}, user],
+            "stream": False,
+            "keep_alive": "15m",
+            "options": {"temperature": temperature, "num_predict": answer,
+                        "num_ctx": self.context_for(len(system) + len(text), images, answer)},
+        }
+        if schema is not None:
+            payload["format"] = schema
+        elif json_mode:
+            payload["format"] = "json"
+        if "thinking" in self.capabilities():
+            payload["think"] = False
+        try:
+            return self._request("POST", "/api/chat", payload)
+        except ProviderError as exc:
+            status = getattr(exc, "status", None)
+            detail = (exc.detail or "").lower()
+            if status == 404 or "not found" in detail:
+                raise ProviderError(f"The model “{self.model}” is not downloaded in Ollama. Run:  ollama pull {self.model}", exc.detail) from None
+            if status == 400 and "think" in payload and "think" in detail:
+                payload.pop("think")
+                return self._request("POST", "/api/chat", payload)
+            if "memory" in detail:
+                raise ProviderError(f"Not enough memory to run “{self.model}”. Close other GPU programs or choose a smaller model "
+                                    "(e.g. qwen3-vl:4b).", exc.detail) from None
+            if exc.message.startswith("Could not reach"):
+                raise ProviderError(f"Ollama is not running at {self.base_url}. Start Ollama and try again.", exc.detail) from None
+            raise
+
+    def _text(self, data: dict[str, Any]) -> str:
+        message = data.get("message") if isinstance(data, dict) else None
+        if not isinstance(message, dict):
+            raise ProviderError("Ollama returned an unexpected response.", json.dumps(data)[:400])
+        text = str(message.get("content") or "")
+        if data.get("done_reason") == "length" and extract_json(text) is None:
+            raise ProviderError("The local model's answer was cut off before it was complete.", "done_reason=length")
+        return text
+
+
 PROVIDER_CLASSES: dict[str, type[Provider]] = {
+    "ollama": OllamaProvider,
     "openai": OpenAICompatibleProvider,
     "anthropic": AnthropicProvider,
     "local": LocalProvider,
@@ -401,7 +512,10 @@ def create_provider(settings) -> Provider | None:
     key = get_api_key(kind)
     if kind in CLOUD_PROVIDERS and not key:
         raise ProviderError("Add an API key in Settings → AI assistance to use this provider.")
-    return cls(ai.base_url or DEFAULT_URLS[kind], ai.model or DEFAULT_MODELS[kind], key, ai.timeout_s, ai.max_retries)
+    timeout = ai.timeout_s
+    if kind in LOCAL_PROVIDERS:
+        timeout = max(timeout, 300.0)  # loading a model and answering on a local GPU/CPU takes longer
+    return cls(ai.base_url or DEFAULT_URLS[kind], ai.model or DEFAULT_MODELS[kind], key, timeout, ai.max_retries)
 
 
 # --------------------------------------------------------------- helpers

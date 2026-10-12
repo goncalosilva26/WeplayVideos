@@ -50,6 +50,13 @@ def asset_nature(asset: AssetRecord) -> str:
         return "motion"
     if kind in NATURE_BY_KIND:
         return NATURE_BY_KIND[kind]
+    # Packaging, outdoor, stationery, mockups… can be a flat design file or a
+    # photographed scene. A vision model that looked at it decides first.
+    from behance_studio.ai.vision import nature_from_ai
+
+    seen = nature_from_ai(asset)
+    if seen in ("artwork", "photo", "document", "screen"):
+        return seen
     a = asset.analysis or {}
     flat = a.get("flat_ratio", 0.5)
     text = a.get("text_fraction", 0.0)

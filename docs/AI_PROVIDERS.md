@@ -122,6 +122,10 @@ interpret references.
 
 Settings → **AI assistance**:
 
+### Ollama — free, on this PC (default, recommended)
+
+See [LOCAL_AI.md](LOCAL_AI.md): model choice for your GPU, Windows installation, the in-app status panel (detects whether Ollama and the model are installed and shows what to do), one-click model download and the `ai-check` verification. Uses Ollama's native API (`/api/chat` with JSON-schema structured outputs).
+
 ### Anthropic (recommended for vision + structured output)
 
 * Provider: *Anthropic API (Claude)*

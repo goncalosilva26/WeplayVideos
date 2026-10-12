@@ -104,6 +104,7 @@ def run(argv: list[str] | None = None) -> int:
         _fatal(f"{APP_NAME} could not open its window: {exc}")
         return 3
     window.show()
+    state.refresh_local_ai()
 
     # Ctrl+C in a console (BehanceStudio_debug.bat) closes the window normally.
     import signal

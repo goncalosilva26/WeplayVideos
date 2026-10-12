@@ -31,6 +31,17 @@ and `docs/samples/v2/` (the five 2.0 concepts, same synthetic fixture).
 | Visual editor overlay on the spec | **Planned (M3)** — inspector editing works on 2.0 proposals | — |
 | Windows distribution: PyInstaller one-folder (`BehanceStudio.exe` + `BehanceStudio-cli.exe`, unused Qt parts filtered), Inno Setup per-user installer (uninstall keeps user data), `build_windows.bat` | **Done — verified on Linux only** (frozen build: doctor, demo generation with rendering, PDF/PNG/HTML export, GUI start); Windows build, installer compilation and code signing not verified | `tests/test_packaging.py`, manual frozen-build run |
 
+### Free local AI (Ollama) — 2.1
+
+| Area | Status | Verified by |
+| --- | --- | --- |
+| Ollama detection (installed / running / model / vision capability), setup steps per state, one-click model download with progress, start Ollama, Settings panel, CLI `doctor` and `ai-check` (`--pull`, `--test`, `--folder`), `LocalAI_Check.bat` | **Done** | `tests/test_ollama.py` (against a stand-in for Ollama's HTTP API) |
+| Native Ollama client: `/api/chat`, JSON-schema `format`, context sized per request, thinking off for thinking models, `keep_alive`, helpful errors, token counts, always free | **Done** | `tests/test_ollama.py` |
+| Design-purpose recognition (purpose + presentation + logo/text flags), plausibility checks against measured facts, AI presentation decides crop vs. stage for ambiguous kinds, automatic recognition after import | **Done** | `tests/test_ollama.py` |
+| Section check: misplaced images moved to a section of their kind (never swapped or dropped; script sections only reported) + `section_mismatch` warning; offline director no longer labels mixed imagery "Photography" | **Done** | `tests/test_ollama.py`; all 11 families checked on the fixture: 0 mismatches |
+| Ollama as default provider (settings migration "none" → "ollama"; paid choices untouched) | **Done** | `tests/test_ollama.py` |
+| **Real model** (Qwen3-VL etc.) | **Not verified here** — ollama.com and registry.ollama.ai are blocked by this environment's network policy and there is no GPU. `tests/test_ollama_live.py` and `ai-check --test` run the real checks on a PC with Ollama. | — |
+
 **Not available for testing:** the Kanoffe reference page (www.behance.net is
 blocked by this environment's network policy) and the real Butter & Bean
 project files. All 2.0 results use the clearly identified synthetic

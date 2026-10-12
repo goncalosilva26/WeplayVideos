@@ -246,6 +246,20 @@ def validate_presentation(
             name = assets[aid].filename if aid in assets else aid
             issues.append(Issue("warning", "repeated_image", f"'{name}' is used {count} times."))
 
+    # Images in a section they do not belong to (see planning.fit).
+    if plan is not None:
+        from behance_studio.planning.fit import mismatches
+
+        kinds = {aid: a.effective_kind for aid, a in assets.items()}
+        by_plan = {s.plan_id: s for s in presentation.sections if s.plan_id}
+        for sp in plan.sections:
+            for aid in mismatches(sp, kinds):
+                shown = by_plan.get(sp.id)
+                name = assets[aid].filename if aid in assets else aid
+                issues.append(Issue("warning", "section_mismatch",
+                                    f"'{name}' ({kinds[aid].replace('_', ' ')}) is in the section '{sp.title}'.",
+                                    shown.id if shown else "", "", sp.title))
+
     planned = 0
     placed = 0
     compliance_checks = 0

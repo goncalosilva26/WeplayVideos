@@ -134,11 +134,47 @@ class Actions(QObject):
             else:
                 self.toast(message)
             if after is not None and project.list_assets(visual_only=True):
-                QTimer.singleShot(0, after)
+                QTimer.singleShot(0, after)  # generation follows and analyses the images itself
+            elif report.added:
+                QTimer.singleShot(0, lambda: self.analyse_with_local_ai(project))
 
         task = self.state.runner.start(work, "import", on_done=done, on_error=lambda e: (dlg.reject(), show_error(self.window, e)), on_progress=dlg.update_progress, on_cancel=lambda: (dlg.reject(), self.state.assets_changed.emit(), self.toast("Import cancelled")))
         dlg.cancel_requested.connect(task.cancel)
         dlg.exec()
+
+    def analyse_with_local_ai(self, project=None, announce: bool = False) -> None:
+        """Free local AI (Ollama) recognises the project's images in the background.
+
+        Runs automatically after an import. Does nothing when Ollama or its
+        model is not available (Settings → AI assistance explains the setup).
+        """
+        project = project or self.state.project
+        settings = self.state.settings
+        if project is None or (settings.ai.provider or "") != "ollama" or not settings.ai.use_for_classification:
+            if announce:
+                info(self.window, "Local AI is off", "Choose “Ollama” in Settings → AI assistance to recognise images with free local AI.")
+            return
+
+        def work(token, progress):
+            ai = service_for_project(project, settings)
+            if ai is None:
+                return None
+            changed = ai.classify_assets(project, project.list_assets(), token=token, progress=progress)
+            return changed, [n for n in ai.log if n]
+
+        def done(result) -> None:
+            if result is None:
+                if announce:
+                    status = self.state.local_ai
+                    info(self.window, "Local AI is not ready", status.summary() if status else "Ollama is not available.",
+                         "See Settings → AI assistance for the setup steps.")
+                return
+            changed, notes = result
+            self.state.assets_changed.emit()
+            self.toast(notes[-1] if notes else ("Local AI recognised the images." if changed else "Local AI found nothing to change."))
+
+        self.toast("Local AI is looking at the images…")
+        self.state.runner.start(work, "local-ai-analysis", on_done=done, on_error=lambda e: show_error(self.window, e, "Local AI analysis stopped"))
 
     # ---------------------------------------------------------- generation
     def _confirm_ai_cost(self, ai, project, request: GenerationRequest) -> bool:

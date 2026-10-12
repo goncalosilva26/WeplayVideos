@@ -24,6 +24,7 @@ class AppState(QObject):
     export_versions = Signal(list)
     navigate = Signal(str)  # page id
     busy_changed = Signal(bool)
+    local_ai_changed = Signal(object)  # OllamaStatus | None
 
     def __init__(self, settings: SettingsStore | None = None) -> None:
         super().__init__()
@@ -32,6 +33,19 @@ class AppState(QObject):
         self.runner = TaskRunner(self.settings.worker_count())
         self.runner.busy_changed.connect(self.busy_changed)
         self.project: Project | None = None
+        self.local_ai = None  # last OllamaStatus (checked in the background)
+
+    def refresh_local_ai(self) -> None:
+        """Check Ollama in the background; emits ``local_ai_changed``."""
+        from behance_studio.ai.service import local_ai_status
+
+        settings = self.settings
+
+        def done(status) -> None:
+            self.local_ai = status
+            self.local_ai_changed.emit(status)
+
+        self.runner.start(lambda token, progress: local_ai_status(settings), "local-ai-check", on_done=done, on_error=lambda _e: None)
 
     @property
     def settings(self):
@@ -40,6 +54,7 @@ class AppState(QObject):
     def save_settings(self) -> None:
         self.settings_store.save()
         self.settings_changed.emit()
+        self.refresh_local_ai()
 
     @property
     def versions(self) -> VersionManager | None:

@@ -24,7 +24,7 @@ from behance_studio.core.qtsupport import ensure_gui_application
 from behance_studio.core.settings import get_settings_store
 from behance_studio.core.tasks import ProgressEvent
 
-COMMANDS = {"create", "import", "generate", "list", "export", "trash", "restore", "purge", "demo", "doctor"}
+COMMANDS = {"create", "import", "generate", "list", "export", "trash", "restore", "purge", "demo", "doctor", "ai-check"}
 
 
 def _progress(event: ProgressEvent) -> None:
@@ -235,7 +235,14 @@ def cmd_doctor(args) -> int:
     print(f"Browser     {browser or 'NOT FOUND — exports and previews will not work'}")
     print(f"Fonts       {len(list(FONTS_DIR.glob('*.ttf')))} bundled")
     ai = get_settings_store().settings.ai
-    if ai.provider in ("", "none"):
+    if ai.provider == "ollama":
+        from behance_studio.ai.ollama import DEFAULT_MODEL, DEFAULT_URL, detect, setup_steps
+
+        status = detect(ai.base_url or DEFAULT_URL, ai.model or DEFAULT_MODEL)
+        print(f"AI          local (Ollama, free) · {status.summary()}")
+        for i, step in enumerate(setup_steps(status, cli=True), 1):
+            print(f"            {i}. {step}")
+    elif ai.provider in ("", "none"):
         print("AI          off (offline heuristics)")
     else:
         from behance_studio.ai.credentials import has_api_key
@@ -245,6 +252,57 @@ def cmd_doctor(args) -> int:
     print(f"Data        {user_data_dir()}")
     print(f"Logs        {logs_dir()}")
     return 0 if browser else 1
+
+
+def cmd_ai_check(args) -> int:
+    """Check local AI (Ollama); optionally download the model and test it for real."""
+    from behance_studio.ai.ollama import DEFAULT_MODEL, DEFAULT_URL, detect, pull_model, setup_steps
+
+    settings = get_settings_store().settings
+    if args.model:
+        settings.ai.model = args.model
+    if settings.ai.provider != "ollama":
+        print(f"The AI provider is “{settings.ai.provider}”. Using Ollama for this check (Settings → AI assistance to switch).")
+        settings.ai.provider = "ollama"
+        settings.ai.base_url = ""
+    url, model = settings.ai.base_url or DEFAULT_URL, settings.ai.model or DEFAULT_MODEL
+    status = detect(url, model, timeout=5.0)
+    print(status.summary())
+    if status.state == "model_missing" and args.pull:
+        print(f"Downloading {model} through Ollama (once)…")
+        last = [-1]
+
+        def show(fraction: float, message: str) -> None:
+            pct = int(fraction * 100)
+            if pct != last[0]:
+                last[0] = pct
+                print(f"\r  {pct:3d}%  {message[:70]:<70}", end="", flush=True)
+
+        try:
+            pull_model(url, model, progress=show)
+        except (RuntimeError, OSError) as exc:
+            print(f"\nDownload failed: {exc}")
+            return 1
+        print()
+        status = detect(url, model, timeout=5.0)
+        print(status.summary())
+    if not status.ready:
+        for i, step in enumerate(setup_steps(status, cli=True), 1):
+            print(f"  {i}. {step}")
+        return 1
+    if not args.test:
+        print("Run with --test to measure recognition accuracy, speed, GPU use and creative direction with this model.")
+        return 0
+    from behance_studio.ai.verify import verify_local_ai
+
+    report = verify_local_ai(settings, Path(args.folder) if args.folder else None, hide_names=not args.show_names,
+                             director=not args.no_director, progress=lambda m: print(f"  … {m}"))
+    print()
+    for line in report.lines():
+        print(line)
+    if report.failures and report.failures == len(report.images):
+        return 1
+    return 0 if (report.accuracy is None or report.accuracy >= 0.6) else 2
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -294,6 +352,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("folder")
     p.add_argument("--seed", type=int, default=2026)
     p.set_defaults(func=cmd_demo)
+    p = sub.add_parser("ai-check", help="check free local AI (Ollama); --pull downloads the model, --test runs it for real")
+    p.add_argument("--model", help="Ollama model to check (default: the one in Settings, else qwen3-vl:8b)")
+    p.add_argument("--pull", action="store_true", help="download the model through Ollama if it is missing")
+    p.add_argument("--test", action="store_true", help="run the real model on test images and one creative-direction request")
+    p.add_argument("--folder", help="test on your own images instead of the bundled test images")
+    p.add_argument("--show-names", action="store_true", help="let the model see file names (hidden by default)")
+    p.add_argument("--no-director", action="store_true", help="skip the creative-direction test")
+    p.set_defaults(func=cmd_ai_check)
     p = sub.add_parser("doctor")
     p.set_defaults(func=cmd_doctor)
     return parser

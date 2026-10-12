@@ -22,7 +22,7 @@ advanced inputs.
 | **Immersive Story** | Numbered chapter spreads, cinematic frames and filmstrips, brand messages as pauses |
 
 The six layout families of version 1 remain available as *Classic layouts*.
-Everything works offline (the offline Creative Director is rules-based, not AI). With an optional AI provider, an AI Creative Director plans each concept's storyboard (validated before use) and an optional AI critique reviews the rendered sections; you see the cost estimate before every paid generation and can set spending limits.
+**Free local AI (recommended):** with [Ollama](https://ollama.com) and a vision model such as Qwen3-VL 8B on your own GPU, imported images are recognised by design purpose, kept in the right sections, and the five concepts are planned with AI — no account, no cost, nothing leaves your PC. See [docs/LOCAL_AI.md](docs/LOCAL_AI.md). Everything also works offline (the offline Creative Director is rules-based, not AI). With an optional AI provider, an AI Creative Director plans each concept's storyboard (validated before use) and an optional AI critique reviews the rendered sections; you see the cost estimate before every paid generation and can set spending limits.
 See [docs/samples/](docs/samples/) for renders and
 [docs/ARCHITECTURE_2.0.md](docs/ARCHITECTURE_2.0.md) for the design of 2.0.
 
@@ -70,6 +70,7 @@ On Linux/macOS (development only): `./run.sh setup`, `./run.sh test`, `./run.sh`
 
 * [User guide](docs/USER_GUIDE.md) — workflow, brief and script formats, editing, exporting
 * [Windows distribution](docs/WINDOWS_INSTALLER.md) — `build_windows.bat`: portable folder + Inno Setup installer
+* [Free local AI with Ollama](docs/LOCAL_AI.md) — model choice for an RTX 3060 12 GB, Windows setup, `LocalAI_Check.bat`
 * [AI providers](docs/AI_PROVIDERS.md) — optional OpenAI-compatible, Anthropic and local models; AI director and critique; privacy, costs and limits
 * [Architecture](docs/ARCHITECTURE.md) — how the pipeline, layout engine and renderer work
 * [Development status](DEVELOPMENT_STATUS.md) — what is complete, partial and pending

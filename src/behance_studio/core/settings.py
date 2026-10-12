@@ -22,12 +22,12 @@ log = get_logger(__name__)
 DEFAULT_FAMILIES = ["minimal", "bold", "photo", "layered", "story"]
 CLASSIC_FAMILIES = ["editorial", "cinematic", "split", "posters", "gallery", "modular"]
 ALL_FAMILIES = DEFAULT_FAMILIES + CLASSIC_FAMILIES
-SETTINGS_VERSION = 2
+SETTINGS_VERSION = 3
 
 
 @dataclass
 class AISettings:
-    provider: str = "none"  # none | openai | anthropic | local
+    provider: str = "ollama"  # ollama (free, this PC) | none | openai | anthropic | local (OpenAI-compatible server)
     base_url: str = ""
     model: str = ""
     timeout_s: float = 60.0
@@ -159,6 +159,12 @@ class SettingsStore:
             # the classic layouts stay available in Settings.
             settings.families = list(DEFAULT_FAMILIES)
             settings.proposal_count = len(DEFAULT_FAMILIES)
+            settings.settings_version = SETTINGS_VERSION
+        if isinstance(data, dict) and data and int(data.get("settings_version", 1)) < 3:
+            # 2.1: free local AI through Ollama replaces "no AI" as the default.
+            # Paid providers chosen by the user are left untouched.
+            if (settings.ai.provider or "none") == "none":
+                settings.ai.provider = "ollama"
             settings.settings_version = SETTINGS_VERSION
         settings.families = [f for f in settings.families if f in ALL_FAMILIES] or list(DEFAULT_FAMILIES)
         return settings

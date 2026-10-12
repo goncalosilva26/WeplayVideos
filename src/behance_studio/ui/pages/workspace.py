@@ -229,6 +229,7 @@ class WorkspacePage(QWidget):
 
         state.project_changed.connect(lambda _p: self.refresh())
         state.assets_changed.connect(self.refresh)
+        state.local_ai_changed.connect(lambda _s: self.refresh() if self.isVisible() else None)
         state.texts_changed.connect(self._load_texts)
 
     # --------------------------------------------------------------- tabs
@@ -414,10 +415,21 @@ class WorkspacePage(QWidget):
         lay.addSpacing(8)
         lay.addWidget(section_title("Analysis"))
         provider = self.state.settings.ai.provider
-        ai_text = "Offline heuristics only (no AI provider configured)." if provider in ("", "none") else (
-            f"AI provider: {provider}. " + ("This project allows AI assistance." if project.config.ai_consent else "Nothing from this project is sent until you allow it in Settings.")
-        )
+        if provider == "ollama":
+            status = self.state.local_ai
+            if status is None:
+                ai_text = "Local AI (Ollama): checking…"
+            elif status.ready:
+                ai_text = f"{status.summary()} Free, nothing leaves this computer. Imported images are recognised automatically."
+            else:
+                ai_text = f"Local AI: {status.summary()} Working offline — Settings → AI assistance shows how to set it up."
+        elif provider in ("", "none"):
+            ai_text = "Offline heuristics only (no AI provider configured)."
+        else:
+            ai_text = f"AI provider: {provider}. " + ("This project allows AI assistance." if project.config.ai_consent else "Nothing from this project is sent until you allow it in Settings.")
         lay.addWidget(label(ai_text, "Faint", wrap=True))
+        if provider == "ollama" and self.state.local_ai is not None and self.state.local_ai.ready:
+            lay.addWidget(button("Recognise images with local AI", "cpu", "Ghost", on_click=lambda: self.actions.analyse_with_local_ai(announce=True)))
         lay.addStretch(1)
 
     # -------------------------------------------------------------- actions

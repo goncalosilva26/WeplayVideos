@@ -34,6 +34,7 @@ from behance_studio.generation.proposal import ProposalData
 from behance_studio.layout.engine import ProposalSpec, build_plan, compose
 from behance_studio.layout.families import available_families, family_info, is_concept
 from behance_studio.layout.validate import Issue, QualityReport, layout_distance, validate_presentation
+from behance_studio.planning.fit import enforce_section_fit
 from behance_studio.planning.planner import PlanningContext
 from behance_studio.projects.models import VersionRecord
 from behance_studio.projects.versions import VersionManager
@@ -374,6 +375,9 @@ def generate(
                     result.ai_used = True
             if plan is None:
                 plan = build_plan(ctx, spec)
+            # Every image stays in a section that matches what it is.
+            fit = enforce_section_fit(plan, {a.id: a for a in assets})
+            plan.notes.extend(fit.notes({a.id: a.filename for a in assets}))
             if ai_service is not None and request.use_ai:
                 try:
                     if ai_service.write_copy(project, plan, directives, direction):

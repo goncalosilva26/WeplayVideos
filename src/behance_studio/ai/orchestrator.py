@@ -49,6 +49,7 @@ from behance_studio.ai.costs import (
     resolve_prices,
 )
 from behance_studio.ai.providers import ImagePart, Provider, create_provider
+from behance_studio.ai.vision import SYSTEM as CLASSIFY_SYSTEM
 from behance_studio.assets.derivatives import ensure_thumbnail
 from behance_studio.assets.roles import infer_roles
 from behance_studio.core.errors import OperationCancelled, ProviderError
@@ -57,7 +58,6 @@ from behance_studio.core.logging_setup import get_logger
 from behance_studio.core.tasks import CancelToken
 from behance_studio.design.typography import AXES, TypeSystem, rank_pairings
 from behance_studio.planning.sections import section_type
-from behance_studio.projects.models import ASSET_KINDS
 
 log = get_logger(__name__)
 
@@ -66,10 +66,6 @@ PREVIEW_SIZE = 640
 MAX_IMAGES_PER_RUN = 150
 MIN_CONFIDENCE = 0.6
 
-CLASSIFY_SYSTEM = (
-    "You label design-portfolio assets for an offline layout tool. Look at the image and its file name and "
-    "answer with JSON only. Do not guess brand facts. Choose exactly one kind from the allowed list."
-)
 BRIEF_SYSTEM = (
     "You read a designer's creative brief and describe the intended brand personality for an automatic layout tool. "
     "Answer with JSON only. Only use what the brief says or clearly implies; do not invent facts."
@@ -81,8 +77,6 @@ COPY_SYSTEM = (
     "No superlatives or marketing claims. One or two plain sentences, at most 32 words. Answer with JSON only."
 )
 
-# Kinds the AI may assign ("reference" is only set by the user or a folder name).
-AI_KINDS = {k: v for k, v in ASSET_KINDS.items() if k != "reference"}
 # Concept modules that display a section's body text.
 COPY_MODULES = {"statement", "split_feature"}
 
@@ -127,6 +121,15 @@ class AIService:
             return None
         if provider is None:
             return None
+        if provider.kind == "ollama":
+            # A quick local check: when Ollama or the model is missing the
+            # app simply works offline (Settings shows how to set it up).
+            from behance_studio.ai.ollama import detect
+
+            status = detect(provider.base_url, provider.model, timeout=2.0)
+            if not status.ready:
+                log.info("Local AI not used: %s", status.summary())
+                return None
         return cls(provider, settings, project)
 
     # ----------------------------------------------------------- gating
@@ -139,7 +142,13 @@ class AIService:
 
     @property
     def images_allowed(self) -> bool:
-        return self.content_allowed and bool(self.settings.ai.allow_image_upload)
+        from behance_studio.ai.providers import is_loopback_url
+
+        if not self.content_allowed:
+            return False
+        # A model on this computer sees previews without them leaving the PC.
+        on_this_pc = self.provider.is_local and is_loopback_url(self.provider.base_url)
+        return on_this_pc or bool(self.settings.ai.allow_image_upload)
 
     def status(self) -> str:
         if self.failed:
@@ -191,32 +200,20 @@ class AIService:
         image.save(buf, "JPEG", quality=82)  # re-encoded: no EXIF/GPS metadata leaves the machine
         return ImagePart(buf.getvalue(), "image/jpeg")
 
-    def _classify_one(self, asset) -> dict[str, Any] | None:
-        key = self._key("classify", asset.sha256)
+    def _classify_one(self, asset, include_names: bool = True) -> dict[str, Any] | None:
+        """Design purpose of one asset from a small preview (cached)."""
+        from behance_studio.ai import vision
+
+        key = self._key("classify", vision.PROMPT_VERSION, asset.sha256, include_names)
         cached = self._cache_get("classify", key)
         if cached is not None:
             return cached
-        kinds = ", ".join(f"{k} ({v})" for k, v in AI_KINDS.items())
-        prompt = (
-            f"File name: {asset.filename}\nFolder: {asset.import_group or '-'}\n"
-            f"Allowed kinds: {kinds}\n"
-            'Return {"kind": "<one allowed kind>", "confidence": <0..1>, "description": "<max 12 words, what is visible>", '
-            '"tags": ["<up to 5 lowercase words>"]}'
-        )
-        data = self.provider.complete_json(CLASSIFY_SYSTEM, prompt, [self._preview(asset)], max_tokens=200, schema=CLASSIFY_SCHEMA, purpose="classify")
-        kind = str(data.get("kind", "")).strip().lower().replace(" ", "_")
-        if kind not in AI_KINDS:
+        prompt = vision.prompt(asset.filename, asset.import_group, include_names)
+        data = self.provider.complete_json(vision.SYSTEM, prompt, [self._preview(asset)], max_tokens=240, schema=vision.SCHEMA, purpose="classify")
+        result = vision.normalise(data)
+        if result is None:
             return None
-        try:
-            confidence = max(0.0, min(1.0, float(data.get("confidence", 0.0))))
-        except (TypeError, ValueError):
-            confidence = 0.0
-        result = {
-            "kind": kind,
-            "confidence": round(confidence, 3),
-            "description": _clean_text(str(data.get("description", "")))[:120],
-            "tags": [_clean_text(str(t)).lower()[:24] for t in (data.get("tags") or [])[:5] if str(t).strip()],
-        }
+        result["model"] = self.provider.model
         self._cache_put("classify", key, result)
         return result
 
@@ -231,7 +228,7 @@ class AIService:
         done = 0
         failures = 0
         progress(0.0, f"AI is recognising {len(todo)} asset(s)…")
-        with ThreadPoolExecutor(max_workers=3) as pool:
+        with ThreadPoolExecutor(max_workers=max(1, getattr(self.provider, "parallel", 3))) as pool:
             futures = {pool.submit(self._classify_one, a): a for a in todo}
             try:
                 for future in as_completed(futures):
@@ -279,6 +276,14 @@ class AIService:
 
     @staticmethod
     def _apply_classification(asset, result: dict[str, Any]) -> bool:
+        from behance_studio.ai.vision import implausible
+
+        reason = implausible(result, asset)
+        if reason:
+            # Kept for transparency, never applied: a wrong label must not move
+            # an image into the wrong section.
+            asset.analysis["ai"] = {**result, "rejected": reason}
+            return True
         asset.analysis["ai"] = result
         if result.get("description") and not asset.description:
             asset.description = result["description"]
@@ -486,8 +491,11 @@ class AIService:
         p = self.provider
         assets = [a for a in project.list_assets() if a.is_visual and not a.excluded]
         if ai.use_for_classification and self.images_allowed:
-            todo = [a for a in self._classify_todo(assets) if self._cache_get("classify", self._key("classify", a.sha256)) is None]
-            sample = p.estimate(CLASSIFY_SYSTEM, "x" * 1500, [ImagePart(b"", "image/jpeg", 640, 480)], 200, purpose="classify")
+            from behance_studio.ai.vision import PROMPT_VERSION as VISION_VERSION
+
+            todo = [a for a in self._classify_todo(assets)
+                    if self._cache_get("classify", self._key("classify", VISION_VERSION, a.sha256, True)) is None]
+            sample = p.estimate(CLASSIFY_SYSTEM, "x" * 2600, [ImagePart(b"", "image/jpeg", 640, 480)], 240, purpose="classify")
             est.add("Asset recognition (one preview each)", len(todo), sample)
         brief = project.brief_text or ""
         if ai.use_for_brief and brief.strip() and self._cache_get("brief", self._key("brief", brief)) is None:
@@ -519,17 +527,6 @@ class AIService:
 
 
 # ---------------------------------------------------------------- schemas
-CLASSIFY_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "kind": {"type": "string", "enum": list(AI_KINDS)},
-        "confidence": {"type": "number"},
-        "description": {"type": "string"},
-        "tags": {"type": "array", "items": {"type": "string"}},
-    },
-    "required": ["kind", "confidence", "description", "tags"],
-    "additionalProperties": False,
-}
 _AXIS = {"anyOf": [{"type": "number"}, {"type": "null"}]}
 BRIEF_SCHEMA: dict[str, Any] = {
     "type": "object",

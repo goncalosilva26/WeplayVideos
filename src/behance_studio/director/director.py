@@ -230,7 +230,7 @@ def _imagery_groups(b: _Builder, assets: list[AssetRecord], pattern: list[str], 
                 continue
             module, need = "duo", 2
         group, queue = queue[:need], queue[need:]
-        b.add(_type_for(group, type_), module, group)
+        b.add(_type_for(group, type_ if type_ in ("applications", "gallery") else "gallery"), module, group)
 
 
 def _common_opening(b: _Builder, cover_module: str, hero: AssetRecord | None, tagline: str) -> None:
@@ -335,7 +335,7 @@ def _minimal(b: _Builder) -> None:
     _common_opening(b, cover, hero, tagline)
     _statement(b)
     if cover == "cover_logo" and hero is not None and not b.compact:
-        b.add("photography", "fullbleed", [hero])
+        b.add(_type_for([hero], "gallery"), "fullbleed", [hero])
     _identity(b, "logo_hero")
     _colour_and_type(b, "palette_columns")
     if inv.patterns:
@@ -432,7 +432,7 @@ def _layered(b: _Builder) -> None:
         b.add("campaign", "float_stack", cards[:4], pattern_id=inv.patterns[0].id if inv.patterns else None)
     trio = _pick_maskable([a for a in inv.imagery if a.id not in b.used])
     if trio:
-        b.add("photography", "masked_trio", trio)
+        b.add(_type_for(trio, "gallery"), "masked_trio", trio)
     else:
         _imagery_groups(b, b.take(inv.photos, 3), ["trio", "duo"], "photography")
     scenes = b.take(inv.scenes, 4)
@@ -479,12 +479,12 @@ def _story(b: _Builder) -> None:
             imagery = [a for a in imagery if a.id != lead.id]
         wide = [a for a in imagery if a.aspect >= 1.3]
         if wide:
-            b.add("photography", "letterbox", wide[:1], params={"index": 1})
+            b.add(_type_for(wide[:1], "gallery"), "letterbox", wide[:1], params={"index": 1})
             imagery = [a for a in imagery if a.id != wide[0].id]
         if len(imagery) >= 3:
-            b.add("photography", "filmstrip", imagery[:3])
+            b.add(_type_for(imagery[:3], "gallery"), "filmstrip", imagery[:3])
             imagery = imagery[3:]
-        _imagery_groups(b, imagery[:3], ["duo", "fullbleed"], "photography")
+        _imagery_groups(b, imagery[:3], ["duo", "fullbleed"], "gallery")
     posters = b.take(inv.posters, 3)
     outdoor = b.take(inv.outdoor, 1)
     if posters or outdoor or inv.social:

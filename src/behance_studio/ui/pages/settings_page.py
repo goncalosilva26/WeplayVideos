@@ -10,11 +10,13 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QGuiApplication
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
+    QFrame,
     QHBoxLayout,
     QLineEdit,
     QPlainTextEdit,
@@ -28,6 +30,7 @@ from PySide6.QtWidgets import (
 from behance_studio import APP_NAME, __version__
 from behance_studio.ai.credentials import get_api_key, set_api_key, storage_description
 from behance_studio.ai.costs import PRICES_AS_OF, UsageLedger, resolve_prices
+from behance_studio.ai.ollama import RECOMMENDED
 from behance_studio.ai.providers import ANTHROPIC_MODELS, DEFAULT_MODELS, DEFAULT_URLS
 from behance_studio.core.fsutil import dir_size, human_size
 from behance_studio.core.logging_setup import log_file_path
@@ -38,7 +41,8 @@ from behance_studio.ui.dialogs.messages import confirm, info, show_error
 from behance_studio.ui.widgets.common import PageHeader, button, label, section_title
 
 PROVIDERS = [
-    ("none", "None — offline only (default)"),
+    ("ollama", "Ollama — free local AI on this PC (recommended)"),
+    ("none", "None — offline only"),
     ("openai", "OpenAI-compatible API (OpenAI, OpenRouter, Azure…)"),
     ("anthropic", "Anthropic API (Claude)"),
     ("local", "Local model (Ollama / LM Studio, OpenAI-compatible)"),
@@ -136,11 +140,11 @@ class SettingsPage(QWidget):
 
         # ---------------------------------------------------------------- AI
         root.addWidget(section_title("AI assistance (optional)"))
-        root.addWidget(label("Without a provider, Behance Studio works fully offline using measured image analysis and an "
-                             "offline Creative Director (rules, not AI). A multimodal AI provider can recognise assets, direct the five "
-                             "concepts and critique the rendered result. Requests to cloud providers are billed by the provider: you see "
-                             "the estimate before every paid generation. Images are only sent when you enable it here AND allow it for "
-                             "a project.", "Faint", wrap=True))
+        root.addWidget(label("Recommended: Ollama runs a vision model on this PC — free, no account, nothing leaves your computer. "
+                             "It recognises what each image is for, plans the five concepts and can critique the result. Without AI, "
+                             "Behance Studio still works fully offline (measured image analysis and a rules-based director). Cloud "
+                             "providers are optional and billed by the provider: you see the estimate before every paid generation, "
+                             "and images are only sent when you enable it here AND allow it for a project.", "Faint", wrap=True))
         form = QFormLayout()
         form.setSpacing(9)
         self.provider = QComboBox()
@@ -149,12 +153,15 @@ class SettingsPage(QWidget):
         self.provider.setCurrentIndex(max(0, self.provider.findData(s.ai.provider)))
         self.provider.currentIndexChanged.connect(self._provider_changed)
         form.addRow("Provider", self.provider)
+        self.ollama_box = self._ollama_panel()
+        form.addRow("Local AI", self.ollama_box)
         self.base_url = QLineEdit(s.ai.base_url)
+        self.base_url.setPlaceholderText(DEFAULT_URLS.get(s.ai.provider, ""))
         form.addRow("API address", self.base_url)
         self.model = QComboBox()
         self.model.setEditable(True)
-        self.model.addItems(ANTHROPIC_MODELS if s.ai.provider == "anthropic" else [])
-        self.model.setCurrentText(s.ai.model)
+        self.model.addItems(self._model_suggestions(s.ai.provider))
+        self.model.setCurrentText(s.ai.model or DEFAULT_MODELS.get(s.ai.provider, ""))
         self.model.currentTextChanged.connect(lambda _t: self._update_price_info())
         form.addRow("Model", self.model)
         self.price_info = label("", "Faint", wrap=True)
@@ -168,6 +175,9 @@ class SettingsPage(QWidget):
         self.allow_images = QCheckBox("Allow sending downscaled asset previews for analysis (each project must also allow it)")
         self.allow_images.setChecked(s.ai.allow_image_upload)
         form.addRow("", self.allow_images)
+        if s.ai.provider == "ollama":
+            for widget in (self.api_key, self.key_info, self.allow_images):
+                widget.setEnabled(False)  # no key needed; previews never leave this PC
         self.ai_classify = QCheckBox("Recognise asset types")
         self.ai_classify.setChecked(s.ai.use_for_classification)
         self.ai_copy = QCheckBox("Draft section descriptions (never facts, metrics or awards)")
@@ -247,6 +257,8 @@ class SettingsPage(QWidget):
     def showEvent(self, event) -> None:  # noqa: N802
         self._load_project_bits()
         self._diagnostics()
+        if self.provider.currentData() == "ollama":
+            self._check_ollama()
         super().showEvent(event)
 
     @staticmethod
@@ -270,7 +282,7 @@ class SettingsPage(QWidget):
             return
         from behance_studio.ai.providers import is_private_url
 
-        local = kind == "local" and is_private_url(self.base_url.text().strip() or DEFAULT_URLS.get("local", ""))
+        local = kind in ("local", "ollama") and is_private_url(self.base_url.text().strip() or DEFAULT_URLS.get(kind, ""))
         prices = resolve_prices(kind, model, local)
         if prices is not None and prices.source == "free":
             self.price_info.setText("Runs on your computer or network: no charge.")
@@ -298,18 +310,141 @@ class SettingsPage(QWidget):
 
     def _provider_changed(self) -> None:
         key = self.provider.currentData()
-        if key in DEFAULT_URLS and not self.base_url.text():
-            self.base_url.setText(DEFAULT_URLS[key])
+        url = self.base_url.text().strip()
+        self.base_url.setPlaceholderText(DEFAULT_URLS.get(key, ""))
+        if url and url in DEFAULT_URLS.values() and key in DEFAULT_URLS:
+            self.base_url.setText(DEFAULT_URLS[key])  # another provider's default: switch it too
         current = self.model.currentText()
+        known = set(DEFAULT_MODELS.values()) | set(ANTHROPIC_MODELS) | {m.name for m in RECOMMENDED}
         self.model.blockSignals(True)
         self.model.clear()
-        self.model.addItems(ANTHROPIC_MODELS if key == "anthropic" else [])
-        self.model.setCurrentText(current)
+        self.model.addItems(self._model_suggestions(key))
+        self.model.setCurrentText(DEFAULT_MODELS.get(key, current) if (not current or current in known) else current)
         self.model.blockSignals(False)
-        if key in DEFAULT_MODELS and not current:
-            self.model.setCurrentText(DEFAULT_MODELS[key])
         self._update_price_info()
         self.api_key.setPlaceholderText("Not stored" if not get_api_key(key) else "•••••••• (stored securely)")
+        local = key == "ollama"
+        self.ollama_box.setVisible(local)
+        for widget in (self.api_key, self.key_info, self.allow_images):
+            widget.setEnabled(not local)  # no key needed; previews never leave this PC
+        if local:
+            self._check_ollama()
+
+    @staticmethod
+    def _model_suggestions(key: str) -> list[str]:
+        if key == "anthropic":
+            return list(ANTHROPIC_MODELS)
+        if key == "ollama":
+            return [m.name for m in RECOMMENDED]
+        return []
+
+    # ----------------------------------------------------------- ollama
+    def _ollama_panel(self) -> QFrame:
+        box = QFrame()
+        box.setObjectName("Card")
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(16, 14, 16, 14)
+        lay.setSpacing(8)
+        self.ollama_status = label("Checking Ollama…", "H3", wrap=True)
+        lay.addWidget(self.ollama_status)
+        self.ollama_steps = label("", "Muted", wrap=True)
+        self.ollama_steps.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        lay.addWidget(self.ollama_steps)
+        row = QHBoxLayout()
+        self.ollama_check = button("Check again", "refresh", "Ghost", on_click=self._check_ollama)
+        self.ollama_get = button("Download Ollama", "external", "Ghost", on_click=self._open_ollama_download)
+        self.ollama_start = button("Start Ollama", "play", "Ghost", on_click=self._start_ollama)
+        self.ollama_pull = button("Download model", "download", "Primary", on_click=self._pull_model)
+        self.ollama_copy = button("Copy command", "copy", "Ghost", on_click=self._copy_pull_command)
+        for b in (self.ollama_check, self.ollama_get, self.ollama_start, self.ollama_pull, self.ollama_copy):
+            row.addWidget(b)
+        row.addStretch(1)
+        lay.addLayout(row)
+        lines = [f"• {m.name} — {m.label}, ≈{m.download_gb:g} GB download, ≈{m.vram_gb:g} GB GPU memory. {m.note}" for m in RECOMMENDED[:3]]
+        lay.addWidget(label("Models for an RTX 3060 12 GB:\n" + "\n".join(lines), "Faint", wrap=True))
+        box.setVisible(self.state.settings.ai.provider == "ollama")
+        self.state.local_ai_changed.connect(self._show_ollama_status)
+        return box
+
+    def _ollama_target(self) -> tuple[str, str]:
+        from behance_studio.ai.ollama import DEFAULT_MODEL, DEFAULT_URL
+
+        return self.base_url.text().strip() or DEFAULT_URL, self.model.currentText().strip() or DEFAULT_MODEL
+
+    def _check_ollama(self) -> None:
+        from behance_studio.ai.ollama import detect
+
+        url, model = self._ollama_target()
+        self.ollama_status.setText("Checking Ollama…")
+        self.state.runner.start(lambda token, progress: detect(url, model), "ollama-check",
+                                on_done=self._show_ollama_status, on_error=lambda e: self.ollama_status.setText(f"Check failed: {e}"))
+
+    def _show_ollama_status(self, status) -> None:
+        from behance_studio.ai.ollama import setup_steps
+
+        if status is None or not hasattr(self, "ollama_status"):
+            return
+        self.ollama_status.setText(("✓ " if status.ready else "") + status.summary())
+        steps = setup_steps(status)
+        self.ollama_steps.setText("\n".join(f"{i}. {t}" for i, t in enumerate(steps, 1)) if steps else
+                                  "Imported images are recognised automatically; the five concepts are planned with local AI. Free.")
+        state = status.state
+        self.ollama_get.setVisible(state == "not_installed")
+        self.ollama_start.setVisible(state == "not_running" and bool(status.installed))
+        self.ollama_pull.setVisible(state in ("model_missing",))
+        self.ollama_copy.setVisible(state in ("not_installed", "model_missing"))
+        if status.models:
+            known = {self.model.itemText(i) for i in range(self.model.count())}
+            extra = [m for m in status.models if m not in known]
+            if extra:
+                self.model.blockSignals(True)
+                self.model.addItems(extra)
+                self.model.blockSignals(False)
+
+    def _open_ollama_download(self) -> None:
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+
+        from behance_studio.ai.ollama import DOWNLOAD_URL
+
+        QDesktopServices.openUrl(QUrl(DOWNLOAD_URL))
+
+    def _copy_pull_command(self) -> None:
+        _url, model = self._ollama_target()
+        QApplication.clipboard().setText(f"ollama pull {model}")
+        self.toast(f"Copied: ollama pull {model}")
+
+    def _start_ollama(self) -> None:
+        from behance_studio.ai.ollama import start_server
+
+        url, _model = self._ollama_target()
+        self.ollama_status.setText("Starting Ollama…")
+        self.state.runner.start(lambda token, progress: start_server(url=url), "ollama-start",
+                                on_done=lambda ok: (self.toast("Ollama started" if ok else "Ollama did not start"), self._check_ollama()),
+                                on_error=lambda e: show_error(self, e, "Could not start Ollama"))
+
+    def _pull_model(self) -> None:
+        from behance_studio.ai.ollama import RECOMMENDED as models
+        from behance_studio.ai.ollama import pull_model, same_model
+        from behance_studio.ui.dialogs.progress import ProgressDialog
+
+        url, model = self._ollama_target()
+        size = next((m.download_gb for m in models if same_model(m.name, model)), None)
+        if not confirm(self, "Download model", f"Download “{model}” through Ollama?", "Download",
+                       detail=(f"About {size:g} GB, " if size else "") + "downloaded once and stored by Ollama. Free."):
+            return
+        dlg = ProgressDialog(self, f"Downloading {model}")
+
+        def work(token, progress):
+            pull_model(url, model, progress=lambda f, m: progress(f, m), cancelled=lambda: token.cancelled)
+            return True
+
+        task = self.state.runner.start(work, "ollama-pull",
+                                       on_done=lambda _r: (dlg.finish(), self.toast(f"{model} is ready"), self._check_ollama()),
+                                       on_error=lambda e: (dlg.reject(), show_error(self, e, "Download failed")),
+                                       on_progress=dlg.update_progress)
+        dlg.cancel_requested.connect(task.cancel)
+        dlg.exec()
 
     def _browse_projects(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "Projects folder", self.projects_dir.text())
