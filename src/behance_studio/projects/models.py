@@ -45,6 +45,7 @@ ASSET_KINDS: dict[str, str] = {
     "video": "Video",
     "motion": "Motion / animation",
     "document": "Document",
+    "reference": "Reference / inspiration (never shown)",
     "other": "Other",
 }
 

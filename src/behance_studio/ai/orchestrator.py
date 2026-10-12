@@ -5,7 +5,15 @@ The offline pipeline is always complete on its own; this module only
 
 * ``classify_assets``  – recognise asset types from downscaled previews.
 * ``refine_direction`` – read the creative brief for personality and mood.
+* ``direct_plan``      – AI Creative Director: a validated storyboard for a
+                         concept (see :mod:`ai.director`), local fallback.
 * ``write_copy``       – draft neutral section descriptions.
+* ``critique``         – AI critique of rendered sections (see :mod:`ai.critique`).
+
+Costs (see :mod:`ai.costs`): every request is authorised against the
+spending limits before it is sent and its reported usage is recorded;
+``estimate_generation`` discloses the expected requests and cost before a
+paid run starts.
 
 Privacy and cost rules (see docs/AI_PROVIDERS.md):
 
@@ -32,6 +40,14 @@ from typing import Any, Callable
 
 from PIL import Image
 
+from behance_studio.ai.costs import (
+    BudgetExceeded,
+    CostEstimate,
+    PriceUnknown,
+    SpendMeter,
+    UsageLedger,
+    resolve_prices,
+)
 from behance_studio.ai.providers import ImagePart, Provider, create_provider
 from behance_studio.assets.derivatives import ensure_thumbnail
 from behance_studio.assets.roles import infer_roles
@@ -65,6 +81,11 @@ COPY_SYSTEM = (
     "No superlatives or marketing claims. One or two plain sentences, at most 32 words. Answer with JSON only."
 )
 
+# Kinds the AI may assign ("reference" is only set by the user or a folder name).
+AI_KINDS = {k: v for k, v in ASSET_KINDS.items() if k != "reference"}
+# Concept modules that display a section's body text.
+COPY_MODULES = {"statement", "split_feature"}
+
 # Copy that sections may receive (others keep titles only).
 COPY_TYPES = {
     "intro", "about", "logo", "logo_variations", "visual_language", "applications", "packaging", "campaign",
@@ -89,6 +110,12 @@ class AIService:
         self._lock = threading.Lock()
         self.log: list[str] = []
         self.failed: str | None = None  # set after a provider failure: no further requests this run
+        self.director_off: str | None = None
+        ai = settings.ai
+        prices = resolve_prices(provider.kind, provider.model, provider.is_local, ai)
+        self.meter = SpendMeter(provider.kind, provider.model, prices, provider.may_bill and not provider.is_local,
+                                getattr(ai, "run_limit_usd", 0.0), getattr(ai, "monthly_limit_usd", 0.0), UsageLedger())
+        provider.meter = self.meter
 
     # ----------------------------------------------------------- factory
     @classmethod
@@ -115,10 +142,18 @@ class AIService:
         return self.content_allowed and bool(self.settings.ai.allow_image_upload)
 
     def status(self) -> str:
+        if self.failed:
+            return f"AI assistance stopped: {self.failed}"
         if not self.content_allowed:
             return "AI provider configured, but this project has not allowed AI assistance."
         parts = ["text"] + (["previews"] if self.images_allowed else [])
         return f"AI assistance active ({self.provider.kind}, {self.provider.model}); sends {' and '.join(parts)}."
+
+    def _stop_for_budget(self, exc: Exception) -> None:
+        message = getattr(exc, "message", str(exc))
+        self.failed = message
+        if message not in self.log:
+            self.log.append(message)
 
     # ------------------------------------------------------------- cache
     def _cache_file(self, name: str):
@@ -161,16 +196,16 @@ class AIService:
         cached = self._cache_get("classify", key)
         if cached is not None:
             return cached
-        kinds = ", ".join(f"{k} ({v})" for k, v in ASSET_KINDS.items())
+        kinds = ", ".join(f"{k} ({v})" for k, v in AI_KINDS.items())
         prompt = (
             f"File name: {asset.filename}\nFolder: {asset.import_group or '-'}\n"
             f"Allowed kinds: {kinds}\n"
             'Return {"kind": "<one allowed kind>", "confidence": <0..1>, "description": "<max 12 words, what is visible>", '
             '"tags": ["<up to 5 lowercase words>"]}'
         )
-        data = self.provider.complete_json(CLASSIFY_SYSTEM, prompt, [self._preview(asset)], max_tokens=200)
+        data = self.provider.complete_json(CLASSIFY_SYSTEM, prompt, [self._preview(asset)], max_tokens=200, schema=CLASSIFY_SCHEMA, purpose="classify")
         kind = str(data.get("kind", "")).strip().lower().replace(" ", "_")
-        if kind not in ASSET_KINDS:
+        if kind not in AI_KINDS:
             return None
         try:
             confidence = max(0.0, min(1.0, float(data.get("confidence", 0.0))))
@@ -189,7 +224,7 @@ class AIService:
         if not (self.settings.ai.use_for_classification and self.images_allowed):
             return False
         token = token or CancelToken()
-        todo = [a for a in assets if a.is_visual and not a.excluded and not a.user_kind and a.sha256][:MAX_IMAGES_PER_RUN]
+        todo = self._classify_todo(assets)
         if not todo:
             return False
         changed = []
@@ -208,6 +243,11 @@ class AIService:
                     done += 1
                     try:
                         result = future.result()
+                    except (BudgetExceeded, PriceUnknown) as exc:
+                        for f in futures:
+                            f.cancel()
+                        self._stop_for_budget(exc)
+                        break
                     except ProviderError as exc:
                         failures += 1
                         if failures >= 3 and done <= 3:  # failing from the start: stop early
@@ -232,6 +272,10 @@ class AIService:
             finalize_relationships(project, changed)
         self.log.append(f"AI asset recognition: {len(changed)} of {len(todo)} asset type(s) updated.")
         return bool(changed)
+
+    def _classify_todo(self, assets) -> list:
+        return [a for a in assets if a.is_visual and not a.excluded and not a.user_kind and a.sha256
+                and a.effective_kind != "reference"][:MAX_IMAGES_PER_RUN]
 
     @staticmethod
     def _apply_classification(asset, result: dict[str, Any]) -> bool:
@@ -269,7 +313,7 @@ class AIService:
                 '"tone": "light" | "dark" | null}'
             )
             try:
-                data = self.provider.complete_json(BRIEF_SYSTEM, prompt, max_tokens=300)
+                data = self.provider.complete_json(BRIEF_SYSTEM, prompt, max_tokens=300, schema=BRIEF_SCHEMA, purpose="brief")
             except ProviderError as exc:
                 self.failed = exc.message
                 raise
@@ -318,6 +362,8 @@ class AIService:
         for sp in plan.sections:
             if sp.locked or sp.exact_text or sp.source == "script" or sp.type not in COPY_TYPES:
                 continue
+            if sp.meta.get("module") and sp.meta["module"] not in COPY_MODULES:
+                continue  # this composition does not display a description: nothing to write
             if sp.meta.get("copy_source") == "user":
                 continue
             if sp.type in ("intro", "about") and directives.brief.about:
@@ -334,13 +380,18 @@ class AIService:
             key = self._key("copy", plan.language, material, directives.brief.raw)
             draft = self._cache_get("copy", key)
             if draft is None:
+                if not self.content_allowed:
+                    break
                 prompt = (
                     f"Language: {language}\nCreative brief (may be empty):\n\"\"\"\n{(directives.brief.raw or '')[:4000]}\n\"\"\"\n"
                     f"Section material:\n{json.dumps(material, ensure_ascii=False)}\n"
                     'Return {"text": "<one or two sentences describing what this section shows>"}'
                 )
                 try:
-                    answer = self.provider.complete_json(COPY_SYSTEM, prompt, max_tokens=160)
+                    answer = self.provider.complete_json(COPY_SYSTEM, prompt, max_tokens=160, schema=COPY_SCHEMA, purpose="copy")
+                except (BudgetExceeded, PriceUnknown) as exc:
+                    self._stop_for_budget(exc)
+                    break
                 except ProviderError as exc:
                     log.warning("AI copy failed: %s", exc.message)
                     self.failed = exc.message
@@ -356,9 +407,146 @@ class AIService:
             sp.body = draft
             sp.meta["copy_source"] = "ai"
             changed = True
-        if changed:
-            self.log.append("AI drafted section descriptions (checked by the fact guard).")
+        note = "AI drafted section descriptions (checked by the fact guard)."
+        if changed and note not in self.log:
+            self.log.append(note)
         return changed
+
+
+    # -------------------------------------------------- creative direction
+    def direct_plan(self, project, ctx, spec, others: list[str] | None = None):
+        """An AI-directed plan for a 2.0 concept, or None (use the offline director)."""
+        from behance_studio.ai import director as AD
+        from behance_studio.layout.families import is_concept
+
+        if not (getattr(self.settings.ai, "use_for_direction", True) and self.content_allowed) or self.director_off:
+            return None
+        if not is_concept(spec.family) or ctx.directives.script_locked:
+            return None
+        references = [a for a in project.list_assets() if a.is_visual and not a.excluded and a.effective_kind == "reference"]
+        request = AD.build_request(project, ctx, spec.family, spec.seed, spec.creativity, list(others or []),
+                                   self.images_allowed, references)
+        key = request.key(self.provider.kind, self.provider.model)
+        data = self._cache_get("director", key)
+        if data is None:
+            try:
+                data = self.provider.complete_json(request.system, request.prompt, request.images, max_tokens=AD.ANSWER_TOKENS,
+                                                   schema=AD.SCHEMA, effort="medium", purpose="director", shared=request.shared)
+            except (BudgetExceeded, PriceUnknown) as exc:
+                self._stop_for_budget(exc)
+                return None
+            except ProviderError as exc:
+                log.warning("AI director unavailable: %s", exc.message)
+                self.director_off = exc.message
+                self.log.append(f"AI creative direction skipped: {exc.message}")
+                return None
+            self._cache_put("director", key, data)
+        story = AD.parse_storyboard(data)
+        if story is None:
+            self.log.append(f"AI storyboard for {spec.family} was unreadable; the offline director planned it.")
+            return None
+        plan, report = AD.storyboard_to_plan(ctx, request.inventory, request.groups, request.handles, spec.family, spec.seed, story)
+        if plan is None:
+            self.log.append(f"AI storyboard for {spec.family} did not pass validation ({'; '.join(report[:3])}); the offline director planned it.")
+            return None
+        log.info("AI director planned %s (%d sections, %d correction(s))", spec.family, len(plan.sections), len(report))
+        return plan
+
+    # ------------------------------------------------------------ critique
+    def critique(self, presentation, capture_path, purpose_label: str = ""):
+        """AI critique of a rendered proposal (None when not allowed/available)."""
+        from behance_studio.ai import critique as AC
+
+        if not (self.settings.ai.use_for_evaluation and self.images_allowed) or self.failed:
+            return None
+        try:
+            return AC.critique_presentation(self, presentation, capture_path)
+        except (BudgetExceeded, PriceUnknown) as exc:
+            self._stop_for_budget(exc)
+        except ProviderError as exc:
+            log.warning("AI critique failed: %s", exc.message)
+            self.log.append(f"AI critique skipped: {exc.message}")
+            self.failed = exc.message
+        return None
+
+    # --------------------------------------------------------------- costs
+    def estimate_generation(self, project, families: list[str], render_previews: bool = True) -> CostEstimate:
+        """Expected requests and cost of an AI-assisted generation (before it runs)."""
+        from behance_studio.ai import critique as AC
+        from behance_studio.ai import director as AD
+        from behance_studio.layout.families import is_concept
+
+        ai = self.settings.ai
+        est = CostEstimate(self.provider.kind, self.provider.model, self.meter.prices, self.meter.may_bill,
+                           run_limit=self.meter.run_limit, monthly_limit=self.meter.monthly_limit,
+                           month_spent=self.meter.ledger.month_spent() if self.meter.ledger else 0.0)
+        if not self.content_allowed:
+            est.notes.append("Nothing will be sent: this project has not allowed AI assistance.")
+            return est
+        p = self.provider
+        assets = [a for a in project.list_assets() if a.is_visual and not a.excluded]
+        if ai.use_for_classification and self.images_allowed:
+            todo = [a for a in self._classify_todo(assets) if self._cache_get("classify", self._key("classify", a.sha256)) is None]
+            sample = p.estimate(CLASSIFY_SYSTEM, "x" * 1500, [ImagePart(b"", "image/jpeg", 640, 480)], 200, purpose="classify")
+            est.add("Asset recognition (one preview each)", len(todo), sample)
+        brief = project.brief_text or ""
+        if ai.use_for_brief and brief.strip() and self._cache_get("brief", self._key("brief", brief)) is None:
+            est.add("Brief interpretation", 1, p.estimate(BRIEF_SYSTEM, brief[:6000] + "x" * 700, None, 300, purpose="brief"))
+        concepts = [f for f in families if is_concept(f)]
+        classic = [f for f in families if not is_concept(f)]
+        if getattr(ai, "use_for_direction", True) and concepts:
+            n = min(AD.MAX_ASSETS, len(assets))
+            shared = "x" * int(5200 + 140 * n + min(len(brief), 5000))
+            rows = max(1, -(-n // 6))
+            images = [ImagePart(b"", "image/jpeg", 6 * 168, rows * 192)] if self.images_allowed else []
+            est.add("Creative direction (one storyboard per concept)", len(concepts),
+                    p.estimate(AD.SYSTEM, shared + "x" * 2600, images, AD.ANSWER_TOKENS, effort="medium", purpose="director"))
+        if ai.use_for_copywriting:
+            sections = len(concepts) + 6 * len(classic)
+            est.add("Section descriptions (upper bound; cached drafts are reused)", sections,
+                    p.estimate(COPY_SYSTEM, "x" * 2200, None, 160, purpose="copy"))
+        if ai.use_for_evaluation and self.images_allowed and render_previews:
+            sections = AC.MAX_SECTIONS
+            images = [ImagePart(b"", "image/jpeg", AC.SECTION_WIDTH, 330)] * sections
+            est.add("Visual critique of rendered proposals", len(families),
+                    p.estimate(AC.SYSTEM, "x" * 1800, images, AC.ANSWER_TOKENS, effort="low", purpose="critique"))
+        if est.requests and est.prices is not None and est.prices.source != "free":
+            est.notes.append("Answers are cached per project: repeating a generation with the same material costs less.")
+        return est
+
+    def usage_note(self) -> str:
+        return self.meter.summary()
+
+
+# ---------------------------------------------------------------- schemas
+CLASSIFY_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "kind": {"type": "string", "enum": list(AI_KINDS)},
+        "confidence": {"type": "number"},
+        "description": {"type": "string"},
+        "tags": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["kind", "confidence", "description", "tags"],
+    "additionalProperties": False,
+}
+_AXIS = {"anyOf": [{"type": "number"}, {"type": "null"}]}
+BRIEF_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "personality": {"type": "object", "properties": {a: _AXIS for a in AXES}, "required": list(AXES), "additionalProperties": False},
+        "mood_words": {"type": "array", "items": {"type": "string"}},
+        "tone": {"anyOf": [{"type": "string", "enum": ["light", "dark"]}, {"type": "null"}]},
+    },
+    "required": ["personality", "mood_words", "tone"],
+    "additionalProperties": False,
+}
+COPY_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {"text": {"type": "string"}},
+    "required": ["text"],
+    "additionalProperties": False,
+}
 
 
 # ---------------------------------------------------------------- helpers

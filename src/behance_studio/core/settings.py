@@ -38,7 +38,14 @@ class AISettings:
     use_for_classification: bool = True
     use_for_copywriting: bool = True
     use_for_brief: bool = True
-    use_for_evaluation: bool = False
+    use_for_direction: bool = True  # AI Creative Director for the five concepts
+    use_for_evaluation: bool = False  # AI critique of rendered sections (sends rendered previews)
+    # Costs (USD). 0 = no limit. Prices: 0 = use the built-in list price when known.
+    run_limit_usd: float = 1.0
+    monthly_limit_usd: float = 0.0
+    price_input_per_mtok: float = 0.0
+    price_output_per_mtok: float = 0.0
+    confirm_paid_runs: bool = True  # show the cost estimate and ask before paid generations
 
 
 @dataclass

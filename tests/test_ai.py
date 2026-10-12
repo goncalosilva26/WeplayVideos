@@ -103,7 +103,23 @@ def ai_settings(mock_ai, monkeypatch):
     s.ai.timeout_s = 10
     s.ai.max_retries = 2
     s.ai.allow_image_upload = True
+    # No prices are built in for OpenAI-compatible models: the user enters them
+    # so the spending limit can be enforced (see test_unknown_price_blocks_paid_requests).
+    s.ai.price_input_per_mtok = 0.4
+    s.ai.price_output_per_mtok = 1.6
     return s
+
+
+def test_unknown_price_blocks_paid_requests(ai_settings, mock_ai, projects_dir, demo_assets_dir):
+    ai_settings.ai.price_input_per_mtok = ai_settings.ai.price_output_per_mtok = 0.0
+    project = Project.create(projects_dir, "No price")
+    import_paths(project, [demo_assets_dir / "04 Packaging"])
+    project.config.ai_consent = True
+    project.save_config()
+    result = generate(project, GenerationRequest(families=["editorial"], count=1), ai_service=service_for_project(project, ai_settings))
+    assert len(result.versions) == 1 and not result.ai_used
+    assert [r for r in mock_ai.requests if r["body"]] == []  # nothing billable was sent
+    assert any("price" in n and "unknown" in n for n in result.notes)
 
 
 def images_sent(mock: MockAI) -> int:

@@ -12,6 +12,7 @@ from PySide6.QtGui import QFont, QGuiApplication
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
@@ -26,7 +27,8 @@ from PySide6.QtWidgets import (
 
 from behance_studio import APP_NAME, __version__
 from behance_studio.ai.credentials import get_api_key, set_api_key, storage_description
-from behance_studio.ai.providers import DEFAULT_MODELS, DEFAULT_URLS
+from behance_studio.ai.costs import PRICES_AS_OF, UsageLedger, resolve_prices
+from behance_studio.ai.providers import ANTHROPIC_MODELS, DEFAULT_MODELS, DEFAULT_URLS
 from behance_studio.core.fsutil import dir_size, human_size
 from behance_studio.core.logging_setup import log_file_path
 from behance_studio.core.paths import logs_dir
@@ -134,9 +136,11 @@ class SettingsPage(QWidget):
 
         # ---------------------------------------------------------------- AI
         root.addWidget(section_title("AI assistance (optional)"))
-        root.addWidget(label("Without a provider, Behance Studio works fully offline using measured image analysis and heuristics. "
-                             "A multimodal AI provider can improve asset recognition and draft copy. Requests to cloud providers may be billed by the provider. "
-                             "Images are only sent when you enable it here AND allow it for a project.", "Faint", wrap=True))
+        root.addWidget(label("Without a provider, Behance Studio works fully offline using measured image analysis and an "
+                             "offline Creative Director (rules, not AI). A multimodal AI provider can recognise assets, direct the five "
+                             "concepts and critique the rendered result. Requests to cloud providers are billed by the provider: you see "
+                             "the estimate before every paid generation. Images are only sent when you enable it here AND allow it for "
+                             "a project.", "Faint", wrap=True))
         form = QFormLayout()
         form.setSpacing(9)
         self.provider = QComboBox()
@@ -147,8 +151,14 @@ class SettingsPage(QWidget):
         form.addRow("Provider", self.provider)
         self.base_url = QLineEdit(s.ai.base_url)
         form.addRow("API address", self.base_url)
-        self.model = QLineEdit(s.ai.model)
+        self.model = QComboBox()
+        self.model.setEditable(True)
+        self.model.addItems(ANTHROPIC_MODELS if s.ai.provider == "anthropic" else [])
+        self.model.setCurrentText(s.ai.model)
+        self.model.currentTextChanged.connect(lambda _t: self._update_price_info())
         form.addRow("Model", self.model)
+        self.price_info = label("", "Faint", wrap=True)
+        form.addRow("", self.price_info)
         self.api_key = QLineEdit()
         self.api_key.setEchoMode(QLineEdit.EchoMode.Password)
         self.api_key.setPlaceholderText("Not stored" if not get_api_key(s.ai.provider) else "•••••••• (stored securely)")
@@ -164,8 +174,31 @@ class SettingsPage(QWidget):
         self.ai_copy.setChecked(s.ai.use_for_copywriting)
         self.ai_brief = QCheckBox("Interpret the creative brief")
         self.ai_brief.setChecked(s.ai.use_for_brief)
-        for cb in (self.ai_classify, self.ai_copy, self.ai_brief):
+        self.ai_direct = QCheckBox("Direct the five concepts (AI storyboards, validated; the offline director is the fallback)")
+        self.ai_direct.setChecked(s.ai.use_for_direction)
+        self.ai_critique = QCheckBox("Critique the rendered proposals (sends rendered previews; one bounded round of fixes)")
+        self.ai_critique.setChecked(s.ai.use_for_evaluation)
+        for cb in (self.ai_classify, self.ai_copy, self.ai_brief, self.ai_direct, self.ai_critique):
             form.addRow("", cb)
+        self.run_limit = self._money(s.ai.run_limit_usd, "No limit")
+        form.addRow("Limit per generation", self.run_limit)
+        self.monthly_limit = self._money(s.ai.monthly_limit_usd, "No limit")
+        form.addRow("Monthly limit", self.monthly_limit)
+        price_row = QHBoxLayout()
+        price_row.setSpacing(10)
+        self.price_in = self._money(s.ai.price_input_per_mtok, "List price", 500.0)
+        self.price_out = self._money(s.ai.price_output_per_mtok, "List price", 500.0)
+        price_row.addWidget(label("Input", "Muted"))
+        price_row.addWidget(self.price_in)
+        price_row.addWidget(label("Output", "Muted"))
+        price_row.addWidget(self.price_out)
+        price_row.addStretch(1)
+        form.addRow("Price per million tokens", price_row)
+        self.confirm_paid = QCheckBox("Show the cost estimate and ask before every paid generation")
+        self.confirm_paid.setChecked(s.ai.confirm_paid_runs)
+        form.addRow("", self.confirm_paid)
+        self.spend_info = label("", "Faint", wrap=True)
+        form.addRow("", self.spend_info)
         self.project_consent = QCheckBox("Allow AI assistance for the current project (sends its brief and, if allowed above, small previews)")
         form.addRow("", self.project_consent)
         test_row = QHBoxLayout()
@@ -216,18 +249,66 @@ class SettingsPage(QWidget):
         self._diagnostics()
         super().showEvent(event)
 
+    @staticmethod
+    def _money(value: float, zero_text: str, maximum: float = 10_000.0) -> QDoubleSpinBox:
+        box = QDoubleSpinBox()
+        box.setRange(0.0, maximum)
+        box.setDecimals(2)
+        box.setSingleStep(0.5)
+        box.setPrefix("$ ")
+        box.setSpecialValueText(zero_text)
+        box.setValue(float(value or 0.0))
+        box.setMinimumWidth(130)
+        box.setMaximumWidth(200)
+        return box
+
+    def _update_price_info(self) -> None:
+        kind = self.provider.currentData()
+        model = self.model.currentText().strip()
+        if kind in (None, "none"):
+            self.price_info.setText("")
+            return
+        from behance_studio.ai.providers import is_private_url
+
+        local = kind == "local" and is_private_url(self.base_url.text().strip() or DEFAULT_URLS.get("local", ""))
+        prices = resolve_prices(kind, model, local)
+        if prices is not None and prices.source == "free":
+            self.price_info.setText("Runs on your computer or network: no charge.")
+        elif prices is not None:
+            self.price_info.setText(f"List price: ${prices.input_per_mtok:g} input / ${prices.output_per_mtok:g} output per million "
+                                    f"tokens ({PRICES_AS_OF}). Enter your own prices below if they differ.")
+        else:
+            self.price_info.setText("Price unknown for this model: enter it below to see costs. While a spending limit is set, "
+                                    "paid requests are not made without a price.")
+
     def _load_project_bits(self) -> None:
         project = self.state.project
         self.project_consent.setEnabled(project is not None)
         self.project_consent.setChecked(bool(project and project.config.ai_consent))
         self.cache_label.setText(human_size(dir_size(project.cache_dir)) if project else "No project open")
+        month = UsageLedger().month()
+        if month.get("requests"):
+            cost = f"≈ ${float(month.get('cost', 0.0)):.2f}" if "cost" in month else "cost unknown"
+            unpriced = f" ({month['unpriced_requests']} without a known price)" if month.get("unpriced_requests") else ""
+            self.spend_info.setText(f"This month: {month['requests']} AI request(s), {cost}{unpriced}. Only counts and "
+                                    "amounts are recorded, never content.")
+        else:
+            self.spend_info.setText("No AI requests this month.")
+        self._update_price_info()
 
     def _provider_changed(self) -> None:
         key = self.provider.currentData()
         if key in DEFAULT_URLS and not self.base_url.text():
             self.base_url.setText(DEFAULT_URLS[key])
-        if key in DEFAULT_MODELS and not self.model.text():
-            self.model.setText(DEFAULT_MODELS[key])
+        current = self.model.currentText()
+        self.model.blockSignals(True)
+        self.model.clear()
+        self.model.addItems(ANTHROPIC_MODELS if key == "anthropic" else [])
+        self.model.setCurrentText(current)
+        self.model.blockSignals(False)
+        if key in DEFAULT_MODELS and not current:
+            self.model.setCurrentText(DEFAULT_MODELS[key])
+        self._update_price_info()
         self.api_key.setPlaceholderText("Not stored" if not get_api_key(key) else "•••••••• (stored securely)")
 
     def _browse_projects(self) -> None:
@@ -330,11 +411,18 @@ class SettingsPage(QWidget):
         s.browser_path = self.browser.text().strip()
         s.ai.provider = self.provider.currentData()
         s.ai.base_url = self.base_url.text().strip()
-        s.ai.model = self.model.text().strip()
+        s.ai.model = self.model.currentText().strip()
         s.ai.allow_image_upload = self.allow_images.isChecked()
         s.ai.use_for_classification = self.ai_classify.isChecked()
         s.ai.use_for_copywriting = self.ai_copy.isChecked()
         s.ai.use_for_brief = self.ai_brief.isChecked()
+        s.ai.use_for_direction = self.ai_direct.isChecked()
+        s.ai.use_for_evaluation = self.ai_critique.isChecked()
+        s.ai.run_limit_usd = round(self.run_limit.value(), 2)
+        s.ai.monthly_limit_usd = round(self.monthly_limit.value(), 2)
+        s.ai.price_input_per_mtok = round(self.price_in.value(), 4)
+        s.ai.price_output_per_mtok = round(self.price_out.value(), 4)
+        s.ai.confirm_paid_runs = self.confirm_paid.isChecked()
         s.worker_threads = self.threads.value()
         if self.api_key.text().strip():
             where = set_api_key(s.ai.provider, self.api_key.text().strip())

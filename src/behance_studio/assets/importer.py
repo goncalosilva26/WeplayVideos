@@ -18,7 +18,7 @@ from PIL import Image, ImageCms
 
 from behance_studio.assets import media
 from behance_studio.assets.analysis import ANALYSIS_VERSION, analyze_image, phash
-from behance_studio.assets.classify import classify
+from behance_studio.assets.classify import classify, is_reference_path
 from behance_studio.assets.derivatives import THUMB_SIZE, ensure_thumbnail, load_visual
 from behance_studio.assets.formats import (
     classify_text_file,
@@ -396,6 +396,10 @@ def import_paths(
             rel_group = ""
         if rel_group == ".":
             rel_group = ""
+        # A dropped "References" / "Inspiration" folder keeps its name: it
+        # marks reference material that is never placed in a presentation.
+        if is_reference_path("", root.name) and not is_reference_path("", rel_group):
+            rel_group = f"{root.name}/{rel_group}" if rel_group else root.name
         candidates.append((path, Path(rel_group), media_type, sha))
         progress(0.15 * index / total, f"Scanning {path.name}")
 

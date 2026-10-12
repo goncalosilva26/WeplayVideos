@@ -55,3 +55,24 @@ def info(parent: QWidget | None, title: str, text: str, detail: str = "") -> Non
     if detail:
         box.setInformativeText(detail)
     box.exec()
+
+
+def choose(parent: QWidget | None, title: str, text: str, buttons: list[str], detail: str = "") -> int | None:
+    """Ask with several labelled choices; returns the index clicked (None when closed).
+
+    The last button is treated as "Cancel" (Escape)."""
+    box = QMessageBox(parent)
+    box.setIcon(QMessageBox.Icon.Question)
+    box.setWindowTitle(title)
+    box.setText(text)
+    if detail:
+        box.setInformativeText(detail)
+    made = []
+    for i, label in enumerate(buttons):
+        role = QMessageBox.ButtonRole.RejectRole if i == len(buttons) - 1 else QMessageBox.ButtonRole.AcceptRole
+        made.append(box.addButton(label, role))
+    box.setEscapeButton(made[-1])
+    box.setDefaultButton(made[0])
+    box.exec()
+    clicked = box.clickedButton()
+    return made.index(clicked) if clicked in made else None

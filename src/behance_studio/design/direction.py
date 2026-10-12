@@ -128,7 +128,7 @@ def _collect_asset_colors(assets: list[AssetRecord]) -> list[tuple[str, float]]:
     candidates: list[tuple[str, float]] = []
     for asset in assets:
         a = asset.analysis or {}
-        if not a or asset.excluded or not asset.is_visual:
+        if not a or asset.excluded or not asset.is_visual or asset.effective_kind == "reference":
             continue
         kind_w = KIND_COLOR_WEIGHT.get(asset.effective_kind, 0.3)
         colors = a.get("colors") if asset.effective_kind in ("palette", "pattern") else (a.get("content_colors") or a.get("colors") or [])

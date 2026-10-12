@@ -85,7 +85,7 @@ def infer_category(
     general prose that only nudges the estimate."""
     if explicit and explicit in CATEGORIES:
         return CategoryResult(explicit, 1.0, {explicit: 1.0}, ["set by the user"], "user")
-    usable = [a for a in assets if a.is_visual and not a.excluded]
+    usable = [a for a in assets if a.is_visual and not a.excluded and a.effective_kind != "reference"]
     counts = Counter(a.effective_kind for a in usable)
     total = max(1, sum(counts.values()))
 

@@ -51,12 +51,15 @@ def render_previews(
     token: CancelToken | None = None,
     progress: Callable[[float, str], None] = lambda f, m: None,
     browser_path: str = "",
+    captures: dict[int, Path] | None = None,
 ) -> dict[int, list[dict]]:
     """Render thumbnails for (presentation, thumb_path, strip_path) jobs.
 
     Returns browser layout issues per job index (empty when the Pillow
-    fallback was used).
+    fallback was used). ``captures`` maps job indexes to paths where the
+    full-length capture is also saved (JPEG), e.g. for the AI critique.
     """
+    captures = captures or {}
     issues: dict[int, list[dict]] = {}
     if not jobs:
         return issues
@@ -75,6 +78,8 @@ def render_previews(
                         browser.capture(page, 0, pres.height, pres.width, CAPTURE_SCALE, png)
                         with Image.open(png) as full:
                             _save_thumbs(full, thumb, strip)
+                            if i in captures:
+                                full.convert("RGB").save(captures[i], "JPEG", quality=85)
                             try:
                                 from behance_studio.qa.rendered import inspect_rendered
 
@@ -93,6 +98,8 @@ def render_previews(
             token.raise_if_cancelled()
         full = renderer.presentation(pres)
         _save_thumbs(full, thumb, strip)
+        if i in captures:
+            full.convert("RGB").save(captures[i], "JPEG", quality=85)
         issues[i] = []
         progress((i + 1) / len(jobs), f"Rendered preview {i + 1} of {len(jobs)}")
     return issues

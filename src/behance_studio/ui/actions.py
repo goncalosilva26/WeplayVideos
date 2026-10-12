@@ -15,7 +15,7 @@ from behance_studio.assets.importer import import_paths
 from behance_studio.core.errors import UserFacingError
 from behance_studio.generation.pipeline import STAGE_LABELS, STAGES, GenerationRequest, GenerationResult, generate
 from behance_studio.projects.store import Project
-from behance_studio.ui.dialogs.messages import info, show_error
+from behance_studio.ui.dialogs.messages import choose, info, show_error
 from behance_studio.ui.dialogs.new_project import NewProjectDialog
 from behance_studio.ui.dialogs.progress import ProgressDialog
 from behance_studio.ui.state import AppState
@@ -140,6 +140,36 @@ class Actions(QObject):
         dlg.exec()
 
     # ---------------------------------------------------------- generation
+    def _confirm_ai_cost(self, ai, project, request: GenerationRequest) -> bool:
+        """Disclose the expected AI requests and cost before a paid run.
+
+        Returns False when the user cancels; switches the run to offline
+        when the user prefers (or AI cannot run within the limits)."""
+        if not ai.content_allowed:
+            return True
+        try:
+            est = ai.estimate_generation(project, request.families, request.render_previews)
+        except Exception:  # noqa: BLE001 - an estimate must never block generation
+            return True
+        if not est.requests:
+            return True
+        if est.blocked_reason:
+            choice = choose(self.window, "AI assistance can't run", est.blocked_reason, ["Generate offline", "Cancel"], detail=est.summary())
+            if choice != 0:
+                return False
+            request.use_ai = False
+            return True
+        if not (est.needs_confirmation and self.state.settings.ai.confirm_paid_runs):
+            return True
+        cost = est.expected_cost
+        use = f"Use AI (≈ ${cost:.2f})" if cost is not None else "Use AI (cost unknown)"
+        choice = choose(self.window, "AI cost estimate", "This generation would use a paid AI provider.", [use, "Generate offline", "Cancel"], detail=est.summary())
+        if choice is None or choice == 2:
+            return False
+        if choice == 1:
+            request.use_ai = False
+        return True
+
     def generate(self, families: list[str] | None = None, count: int = 0, creativity: float | None = None, seed: int | None = None) -> None:
         project = self.state.project
         if project is None:
@@ -159,6 +189,8 @@ class Actions(QObject):
             ai = service_for_project(project, settings)
         except Exception:  # noqa: BLE001 - AI is optional
             ai = None
+        if ai is not None and not self._confirm_ai_cost(ai, project, request):
+            return
         dlg = ProgressDialog(self.window, "Generating proposals", [(s, STAGE_LABELS[s]) for s in STAGES])
 
         def work(token, progress):

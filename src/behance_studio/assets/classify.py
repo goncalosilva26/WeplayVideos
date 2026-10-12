@@ -191,6 +191,17 @@ def visual_scores(media_type: str, width: int, height: int, has_alpha: bool, a: 
     return s, reasons
 
 
+# Folders (or file names) the designer uses for reference material: imported
+# for the AI director to look at, never placed in a presentation.
+REFERENCE_WORDS = {"reference", "references", "referencia", "referencias", "inspiration", "inspiracao", "inspiracoes",
+                   "moodboard", "moodboards", "benchmark", "benchmarks"}
+
+
+def is_reference_path(filename: str, folder: str) -> bool:
+    tokens = set(tokenize(folder)) | set(tokenize(filename.rsplit(".", 1)[0]))
+    return bool(tokens & REFERENCE_WORDS)
+
+
 def classify(
     filename: str,
     folder: str,
@@ -201,6 +212,8 @@ def classify(
     analysis: dict[str, Any],
     animated: bool = False,
 ) -> Classification:
+    if is_reference_path(filename, folder):
+        return Classification("reference", 0.95, ["folder or name marks reference material"], {"reference": 0.95}, None)
     kw, kw_reasons = keyword_scores(filename, folder)
     analysis = dict(analysis or {})
     analysis["animated"] = animated

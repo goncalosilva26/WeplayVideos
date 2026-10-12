@@ -110,7 +110,8 @@ def build_directives(
             provenance["category"] = "brief" if category.source == "brief" else "assets"
 
     # --- exclusions -----------------------------------------------------------
-    excluded = {a.id for a in assets if a.excluded}
+    # Reference material is never part of a presentation.
+    excluded = {a.id for a in assets if a.excluded or a.effective_kind == "reference"}
     if script:
         excluded |= script.excluded_asset_ids
         if script.excluded_asset_ids:

@@ -22,7 +22,10 @@ and `docs/samples/v2/` (the five 2.0 concepts, same synthetic fixture).
 | Five concepts by default (Minimal Editorial, Bold Graphic, Premium Photographic, Layered Experimental, Immersive Story) | **Done** | structural distance between every pair > 0.25 (test); classic v1 layouts still available |
 | Rendered visual QA (empty surface, blank media, measured overlay contrast, off-balance) + bounded targeted re-composition | **Done (technical checks)** | unit tests; observed fixing a real 2.4:1 contrast cover in an end-to-end run |
 | ZIP import (safe extraction) | **Done** | `tests/test_zip_import.py` |
-| AI Creative Director / AI visual critique via providers (structured JSON) | **Planned (M2)** | — |
+| AI Creative Director via providers: storyboard per concept (structured JSON schema, Anthropic structured outputs), one labelled contact sheet instead of per-asset images, validation and repair (unknown handles/modules/messages dropped, artwork re-staged instead of cropped, counts clamped, cover first / closing last), no AI-written presentation text, offline director fallback, cache | **Done — tested against a local mock server only** | `tests/test_ai_director.py` (validation, fallback, five AI-directed concepts, cache, consent, no images without permission) |
+| AI visual critique of rendered sections (rubric 1–5, closed problem list), one bounded round: weakest flagged sections recomposed, kept only if technical rendered checks do not get worse | **Done — mock-tested; off by default** | `tests/test_ai_director.py::test_ai_critique_recomposes_flagged_sections` (real Chromium render) |
+| Cost disclosure and limits: per-step estimate before paid runs (UI dialog: Use AI / Generate offline / Cancel; CLI `--allow-paid-ai`), built-in prices only for documented Anthropic models, user-entered prices otherwise, per-generation and monthly limits enforced before each request, real usage from responses, month ledger (counts only) | **Done** | `tests/test_ai_director.py` (meter, ledger, limits, unknown-price blocking), `tests/test_ai.py` |
+| Reference screenshots (folder `References`/`Inspiration`/`Moodboard`): never placed in presentations; shown to the AI director as one sheet | **Done** | `tests/test_ai_director.py::test_reference_folder_is_never_shown_but_offered_to_the_director` |
 | Local vision model (CLIP via ONNX Runtime, GPU) | **Blocked here** — model host (huggingface.co) is not reachable from this environment | — |
 | Generative mockups | **Planned (M4)** — CSS device/frame mockups are done | — |
 | Visual editor overlay on the spec | **Planned (M3)** — inspector editing works on 2.0 proposals | — |
@@ -37,7 +40,10 @@ needed for the acceptance test.
 **Honesty notes:** the local Creative Director and all QA checks are
 deterministic rules and measurements, not AI. Passing them does not make a
 layout artistically excellent; the renders in `docs/samples/v2/` are the
-evidence to judge.
+evidence to judge. The AI director and critique have only been exercised
+against `tests/ai_mock.py` (no API key was available and no real provider
+was called), so their output quality with a real model is unverified; the
+provider code follows the documented Anthropic Messages API request shape.
 
 ## Version 1 record
 

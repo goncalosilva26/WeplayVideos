@@ -17,6 +17,16 @@ Rules enforced here:
 * Nothing is sent unless the caller (see :mod:`ai.orchestrator`) decided the
   user has configured and authorised it. :meth:`test_connection` only lists
   the available models, which providers do not bill.
+* With a :class:`~behance_studio.ai.costs.SpendMeter` attached, every
+  request is authorised against the spending limits *before* it is sent and
+  the usage the provider reports is recorded afterwards.
+
+The clients deliberately use the standard library only: one small HTTP
+layer serves three provider families (and keeps the Windows build free of
+extra SDK dependencies). Anthropic requests follow the current Messages API
+shape: structured outputs (``output_config.format``) for JSON answers,
+``output_config.effort`` to bound reasoning on models that always think, and
+no sampling parameters on models that reject them.
 """
 
 from __future__ import annotations
@@ -24,6 +34,7 @@ from __future__ import annotations
 import base64
 import ipaddress
 import json
+import re
 import socket
 import time
 import urllib.error
@@ -33,6 +44,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from behance_studio import __version__
+from behance_studio.ai.costs import THINKING_EXPECTED, THINKING_HEADROOM, RequestEstimate, SpendMeter, Usage, image_tokens, text_tokens
 from behance_studio.ai.credentials import get_api_key
 from behance_studio.core.errors import ProviderError
 from behance_studio.core.logging_setup import get_logger
@@ -44,7 +56,9 @@ DEFAULT_URLS = {
     "anthropic": "https://api.anthropic.com",
     "local": "http://localhost:11434/v1",
 }
-DEFAULT_MODELS = {"openai": "gpt-4.1-mini", "anthropic": "claude-sonnet-5-5", "local": "llava"}
+DEFAULT_MODELS = {"openai": "gpt-4.1-mini", "anthropic": "claude-opus-5-5", "local": "llava"}
+# Suggested Anthropic models (shown in Settings with their list prices).
+ANTHROPIC_MODELS = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-1"]
 CLOUD_PROVIDERS = ("openai", "anthropic")
 ANTHROPIC_VERSION = "2023-06-01"
 USER_AGENT = f"BehanceStudio/{__version__}"
@@ -54,9 +68,39 @@ USER_AGENT = f"BehanceStudio/{__version__}"
 class ImagePart:
     data: bytes
     mime: str = "image/jpeg"
+    width: int = 0
+    height: int = 0
 
     def b64(self) -> str:
         return base64.b64encode(self.data).decode("ascii")
+
+    def size(self) -> tuple[int, int]:
+        if self.width and self.height:
+            return self.width, self.height
+        try:
+            import io
+
+            from PIL import Image
+
+            with Image.open(io.BytesIO(self.data)) as im:
+                self.width, self.height = im.size
+        except Exception:  # noqa: BLE001 - unknown size: assume a preview
+            self.width, self.height = 640, 640
+        return self.width, self.height
+
+
+def anthropic_model_traits(model: str) -> dict[str, bool]:
+    """Request features by Anthropic model generation.
+
+    * ``modern`` – Claude 5 family and Opus 4.6+/Sonnet 4.6: structured
+      outputs and ``effort`` are available; reasoning (thinking) may be on
+      by default, so ``max_tokens`` needs headroom.
+    * ``no_sampling`` – the model rejects ``temperature``/``top_p``.
+    """
+    m = (model or "").lower()
+    five = bool(re.match(r"claude-(opus|sonnet|haiku|fable|mythos)-5", m))
+    newer4 = bool(re.match(r"claude-(opus-4-[6-9]|sonnet-4-6)", m))
+    return {"modern": five or newer4, "no_sampling": five or bool(re.match(r"claude-opus-4-[7-9]", m))}
 
 
 def is_loopback_url(url: str) -> bool:
@@ -91,6 +135,8 @@ class Provider:
         self.timeout = max(5.0, float(timeout))
         self.max_retries = max(0, min(5, int(max_retries)))
         self.requests_made = 0
+        self.meter: SpendMeter | None = None
+        self.last_usage = Usage()
         # A server on this machine is contacted directly, never through a proxy.
         self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({})) if is_loopback_url(self.base_url) else urllib.request.build_opener()
         scheme = urlparse(self.base_url).scheme
@@ -110,7 +156,8 @@ class Provider:
 
     @property
     def may_bill(self) -> bool:
-        return self.kind in CLOUD_PROVIDERS
+        """Cloud APIs, and any server that is not on this computer/network."""
+        return self.kind in CLOUD_PROVIDERS or not is_private_url(self.base_url)
 
     # ------------------------------------------------------------- http
     def _headers(self) -> dict[str, str]:
@@ -138,7 +185,9 @@ class Provider:
                     time.sleep(wait)
                     last = exc
                     continue
-                raise _http_error(exc.code, detail, self) from None
+                error = _http_error(exc.code, detail, self)
+                error.status = exc.code  # type: ignore[attr-defined]
+                raise error from None
             except (urllib.error.URLError, socket.timeout, TimeoutError, ConnectionError) as exc:
                 last = exc
                 if attempt < self.max_retries:
@@ -154,15 +203,48 @@ class Provider:
     def list_models(self) -> list[str]:
         raise NotImplementedError
 
-    def complete(self, system: str, prompt: str, images: list[ImagePart] | None = None, max_tokens: int = 600, temperature: float = 0.2) -> str:
-        raise NotImplementedError
+    def complete(self, system: str, prompt: str, images: list[ImagePart] | None = None, max_tokens: int = 600, temperature: float = 0.2,
+                 *, schema: dict[str, Any] | None = None, effort: str = "low", purpose: str = "request", shared: str = "") -> str:
+        """Send one request and return the answer text.
 
-    def complete_json(self, system: str, prompt: str, images: list[ImagePart] | None = None, max_tokens: int = 600) -> dict[str, Any]:
-        text = self.complete(system, prompt, images, max_tokens=max_tokens, temperature=0.1)
+        ``shared`` is context that repeats across several requests of a run
+        (placed before ``prompt``; Anthropic caches it). ``schema`` asks for
+        JSON that matches it where the provider supports structured outputs.
+        """
+        est = self.estimate(system, shared + prompt, images, max_tokens, effort=effort, purpose=purpose)
+        if self.meter is not None:
+            self.meter.authorize(est)
+        data = self._send(system, prompt, images or [], max_tokens, temperature, schema, effort, shared)
+        self.last_usage = Usage.from_response(data)
+        if self.meter is not None:
+            self.meter.record(self.last_usage, est)
+        return self._text(data)
+
+    def complete_json(self, system: str, prompt: str, images: list[ImagePart] | None = None, max_tokens: int = 600,
+                      *, schema: dict[str, Any] | None = None, effort: str = "low", purpose: str = "request", shared: str = "") -> dict[str, Any]:
+        text = self.complete(system, prompt, images, max_tokens=max_tokens, temperature=0.1, schema=schema, effort=effort, purpose=purpose, shared=shared)
         data = extract_json(text)
         if not isinstance(data, dict):
             raise ProviderError("The AI provider did not return the expected structured answer.", text[:400])
         return data
+
+    def thinks(self) -> bool:
+        """Does this model spend reasoning tokens on every answer?"""
+        return False
+
+    def estimate(self, system: str, prompt: str, images: list[ImagePart] | None, max_tokens: int, effort: str = "low", purpose: str = "request") -> RequestEstimate:
+        img = sum(image_tokens(*im.size(), kind=self.kind) for im in images or [])
+        think = THINKING_EXPECTED.get(effort, 1600) if self.thinks() else 0
+        headroom = THINKING_HEADROOM.get(effort, 6000) if self.thinks() else 0
+        answer = max(16, int(max_tokens * 0.6))
+        return RequestEstimate(purpose, text_tokens(system, prompt) + img + 12, answer + think, max_tokens + headroom, len(images or []))
+
+    def _send(self, system: str, prompt: str, images: list[ImagePart], max_tokens: int, temperature: float,
+              schema: dict[str, Any] | None, effort: str, shared: str) -> dict[str, Any]:
+        raise NotImplementedError
+
+    def _text(self, data: dict[str, Any]) -> str:
+        raise NotImplementedError
 
     def test_connection(self) -> str:
         """Check the address, key and model without a billable request."""
@@ -190,21 +272,25 @@ class OpenAICompatibleProvider(Provider):
         data = self._request("GET", "/models")
         return sorted(str(m.get("id", "")) for m in data.get("data", []) if isinstance(m, dict))
 
-    def complete(self, system: str, prompt: str, images: list[ImagePart] | None = None, max_tokens: int = 600, temperature: float = 0.2) -> str:
+    def _send(self, system: str, prompt: str, images: list[ImagePart], max_tokens: int, temperature: float,
+              schema: dict[str, Any] | None, effort: str, shared: str) -> dict[str, Any]:
+        text = f"{shared}\n\n{prompt}" if shared else prompt
         content: list[dict[str, Any]] | str
         if images:
-            content = [{"type": "text", "text": prompt}]
+            content = [{"type": "text", "text": text}]
             for image in images:
                 content.append({"type": "image_url", "image_url": {"url": f"data:{image.mime};base64,{image.b64()}", "detail": "low"}})
         else:
-            content = prompt
+            content = text
         payload = {
             "model": self.model,
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": content}],
             "max_tokens": max_tokens,
             "temperature": temperature,
         }
-        data = self._request("POST", "/chat/completions", payload)
+        return self._request("POST", "/chat/completions", payload)
+
+    def _text(self, data: dict[str, Any]) -> str:
         try:
             message = data["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as exc:
@@ -235,23 +321,62 @@ class AnthropicProvider(Provider):
         data = self._request("GET", self._path("/models"))
         return sorted(str(m.get("id", "")) for m in data.get("data", []) if isinstance(m, dict))
 
-    def complete(self, system: str, prompt: str, images: list[ImagePart] | None = None, max_tokens: int = 600, temperature: float = 0.2) -> str:
+    def thinks(self) -> bool:
+        return anthropic_model_traits(self.model)["modern"]
+
+    def _payload(self, system: str, prompt: str, images: list[ImagePart], max_tokens: int, temperature: float,
+                 schema: dict[str, Any] | None, effort: str, shared: str, plain: bool = False) -> dict[str, Any]:
+        traits = anthropic_model_traits(self.model)
         content: list[dict[str, Any]] = []
-        for image in images or []:
+        for image in images:
             content.append({"type": "image", "source": {"type": "base64", "media_type": image.mime, "data": image.b64()}})
+        if shared:
+            # Repeated context of this run: cached so later requests re-read it cheaply.
+            content.append({"type": "text", "text": shared, "cache_control": {"type": "ephemeral"}})
         content.append({"type": "text", "text": prompt})
-        payload = {
+        payload: dict[str, Any] = {
             "model": self.model,
             "max_tokens": max_tokens,
-            "temperature": temperature,
             "system": system,
             "messages": [{"role": "user", "content": content}],
         }
-        data = self._request("POST", self._path("/messages"), payload)
+        if traits["modern"] and not plain:
+            # Reasoning counts towards max_tokens: leave room so the answer is not cut off.
+            payload["max_tokens"] = max_tokens + THINKING_HEADROOM.get(effort, 6000)
+            config: dict[str, Any] = {"effort": effort}
+            if schema is not None:
+                config["format"] = {"type": "json_schema", "schema": schema}
+            payload["output_config"] = config
+        elif traits["modern"]:
+            payload["max_tokens"] = max_tokens + THINKING_HEADROOM.get(effort, 6000)
+        if not traits["no_sampling"]:
+            payload["temperature"] = temperature
+        return payload
+
+    def _send(self, system: str, prompt: str, images: list[ImagePart], max_tokens: int, temperature: float,
+              schema: dict[str, Any] | None, effort: str, shared: str) -> dict[str, Any]:
+        payload = self._payload(system, prompt, images, max_tokens, temperature, schema, effort, shared)
+        try:
+            return self._request("POST", self._path("/messages"), payload)
+        except ProviderError as exc:
+            if getattr(exc, "status", None) == 400 and "output_config" in payload:
+                # A gateway or snapshot without structured outputs/effort: ask plainly once.
+                log.info("Provider refused output_config (%s); retrying without it", exc.detail)
+                plain = self._payload(system, prompt, images, max_tokens, temperature, None, effort, shared, plain=True)
+                return self._request("POST", self._path("/messages"), plain)
+            raise
+
+    def _text(self, data: dict[str, Any]) -> str:
         parts = data.get("content") if isinstance(data, dict) else None
         if not isinstance(parts, list):
             raise ProviderError("The AI provider returned an unexpected response.", json.dumps(data)[:400])
-        return "".join(p.get("text", "") for p in parts if isinstance(p, dict) and p.get("type") == "text")
+        text = "".join(p.get("text", "") for p in parts if isinstance(p, dict) and p.get("type") == "text")
+        stop = data.get("stop_reason")
+        if stop == "refusal":
+            raise ProviderError("The AI model declined this request.", str(data.get("stop_details") or "")[:400])
+        if stop == "max_tokens" and not text.strip():
+            raise ProviderError("The AI answer was cut off before it was complete.", "stop_reason=max_tokens")
+        return text
 
 
 PROVIDER_CLASSES: dict[str, type[Provider]] = {

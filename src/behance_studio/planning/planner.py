@@ -226,7 +226,7 @@ def _natural_key(asset: AssetRecord) -> list:
 
 def usable_assets(ctx: PlanningContext) -> list[AssetRecord]:
     excluded = ctx.directives.excluded_asset_ids
-    return [a for a in ctx.assets if a.is_visual and a.id not in excluded and not a.excluded]
+    return [a for a in ctx.assets if a.is_visual and a.id not in excluded and not a.excluded and a.effective_kind != "reference"]
 
 
 def dedupe_near_duplicates(assets: list[AssetRecord]) -> tuple[list[AssetRecord], list[str]]:

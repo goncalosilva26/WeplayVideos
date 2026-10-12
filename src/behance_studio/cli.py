@@ -109,7 +109,18 @@ def cmd_generate(args) -> int:
         workers=settings.worker_count(),
         missing_reference_policy="abort" if args.strict else "continue",
     )
-    result = generate(project, request, progress=_progress, ai_service=service_for_project(project, settings))
+    ai = service_for_project(project, settings)
+    if ai is not None and ai.content_allowed:
+        est = ai.estimate_generation(project, request.families, request.render_previews)
+        if est.requests:
+            print(est.summary())
+            if est.blocked_reason:
+                print(f"AI not used: {est.blocked_reason}")
+                ai = None
+            elif est.needs_confirmation and not args.allow_paid_ai:
+                print("AI not used: this provider may bill your account. Re-run with --allow-paid-ai to use it.")
+                ai = None
+    result = generate(project, request, progress=_progress, ai_service=ai)
     print()
     for issue in result.script_issues:
         print(f"  script {issue.severity}: {issue.message}")
@@ -256,6 +267,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--creativity", type=float)
     p.add_argument("--no-previews", action="store_true")
     p.add_argument("--strict", action="store_true", help="abort if the script references missing files")
+    p.add_argument("--allow-paid-ai", action="store_true",
+                   help="allow requests to a paid AI provider (the cost estimate is printed first; limits in Settings apply)")
     p.set_defaults(func=cmd_generate)
     p = sub.add_parser("list")
     p.add_argument("project")

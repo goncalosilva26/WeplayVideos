@@ -32,7 +32,7 @@ from behance_studio.core.tasks import CancelToken, ProgressEvent, StageTracker
 from behance_studio.design.direction import CreativeDirection, build_direction
 from behance_studio.generation.proposal import ProposalData
 from behance_studio.layout.engine import ProposalSpec, build_plan, compose
-from behance_studio.layout.families import available_families, family_info
+from behance_studio.layout.families import available_families, family_info, is_concept
 from behance_studio.layout.validate import Issue, QualityReport, layout_distance, validate_presentation
 from behance_studio.planning.planner import PlanningContext
 from behance_studio.projects.models import VersionRecord
@@ -168,21 +168,98 @@ def refine_rendered(project, proposals: list[ProposalData], issues: dict[int, li
             report = validate_presentation(pres, assets, proposal.plan)
             if len(report.errors) > len(proposal.quality.errors):
                 break
-            trial_thumb, trial_strip = staging / f"{i}-trial-thumb.jpg", staging / f"{i}-trial-strip.jpg"
-            trial = render_previews(project, [(pres, trial_thumb, trial_strip)], token, browser_path=browser_path).get(0, [])
+            trial = _trial_render(project, i, pres, staging, token, browser_path)
             if score(trial) < score(issues.get(i, [])):
                 proposal.spec, proposal.presentation, proposal.quality = spec, pres, report
-                trial_thumb.replace(staging / f"{i}-thumb.jpg")
-                trial_strip.replace(staging / f"{i}-strip.jpg")
+                _keep_trial(i, staging)
                 issues[i] = trial
                 proposal.notes.append(f"Rendered check: {len(plan_ids)} section(s) recomposed to fix visual issues.")
                 found = [x for x in trial if x.get("kind") in FIXABLE_RENDERED]
                 note(f"Refined {family_info(proposal.spec.family).name}")
             else:
-                for path in (trial_thumb, trial_strip):
-                    if path.exists():
-                        path.unlink()
+                _drop_trial(i, staging)
                 break
+
+
+def _trial_render(project, i: int, pres, staging, token, browser_path: str) -> list[dict]:
+    capture = staging / f"{i}-capture.jpg"
+    captures = {0: staging / f"{i}-trial-capture.jpg"} if capture.exists() else None
+    jobs = [(pres, staging / f"{i}-trial-thumb.jpg", staging / f"{i}-trial-strip.jpg")]
+    return render_previews(project, jobs, token, browser_path=browser_path, captures=captures).get(0, [])
+
+
+def _keep_trial(i: int, staging) -> None:
+    for kind in ("thumb", "strip", "capture"):
+        trial = staging / f"{i}-trial-{kind}.jpg"
+        if trial.exists():
+            trial.replace(staging / f"{i}-{kind}.jpg")
+
+
+def _drop_trial(i: int, staging) -> None:
+    for kind in ("thumb", "strip", "capture"):
+        trial = staging / f"{i}-trial-{kind}.jpg"
+        if trial.exists():
+            trial.unlink()
+
+
+def refine_with_critique(project, proposals: list[ProposalData], issues: dict[int, list[dict]], staging, assets: dict,
+                         ai_service, browser_path: str = "", token: CancelToken | None = None, note=lambda m: None) -> bool:
+    """One bounded round of AI critique per proposal (see ``ai.critique``).
+
+    Sections the critique flags are recomposed with an alternative module;
+    the change is kept only when no geometry error appears and the rendered
+    technical score does not get worse. Returns True when a critique ran.
+    """
+    from behance_studio.ai.critique import to_fix
+    from behance_studio.qa.rendered import score
+
+    ran = False
+    for i, proposal in enumerate(proposals):
+        if token:
+            token.raise_if_cancelled()
+        capture = staging / f"{i}-capture.jpg"
+        if not capture.exists():
+            continue
+        note(f"AI critique of {family_info(proposal.spec.family).name}")
+        critique = ai_service.critique(proposal.presentation, capture)
+        if critique is None:
+            if getattr(ai_service, "failed", None):
+                break
+            continue
+        ran = True
+        proposal.quality.metrics["ai_critique"] = float(critique["overall"])
+        proposal.sources["ai_critique"] = critique
+        proposal.notes.append(f"AI critique: {critique['overall']}/5 — {critique['summary']}")
+        plan_ids = to_fix(critique)
+        if not plan_ids:
+            continue
+        overrides = dict(proposal.spec.overrides)
+        for pid in plan_ids:
+            entry = dict(overrides.get(pid, {}))
+            entry["variant_seed"] = int(entry.get("variant_seed", 0)) + 101
+            overrides[pid] = entry
+        spec = ProposalSpec(proposal.spec.family, proposal.spec.seed, proposal.spec.creativity, proposal.spec.width, overrides)
+        pres = compose(proposal.plan, assets, proposal.direction, spec)
+        before = {s.plan_id: s.meta.get("module") for s in proposal.presentation.sections}
+        changed = [s for s in pres.sections if s.plan_id in plan_ids and s.meta.get("module") != before.get(s.plan_id)]
+        if not changed:
+            proposal.notes.append("AI critique: the flagged section(s) have no alternative composition; kept as they are.")
+            continue
+        report = validate_presentation(pres, assets, proposal.plan)
+        if len(report.errors) > len(proposal.quality.errors):
+            continue
+        trial = _trial_render(project, i, pres, staging, token, browser_path)
+        if score(trial) <= score(issues.get(i, [])):
+            report.metrics["ai_critique"] = proposal.quality.metrics["ai_critique"]
+            proposal.spec, proposal.presentation, proposal.quality = spec, pres, report
+            _keep_trial(i, staging)
+            issues[i] = trial
+            proposal.notes.append(f"AI critique: {len(changed)} weak section(s) recomposed with an alternative module "
+                                  "(not re-reviewed by the AI).")
+        else:
+            _drop_trial(i, staging)
+            proposal.notes.append(f"AI critique flagged {len(changed)} section(s); the alternatives measured worse and were not kept.")
+    return ran
 
 
 def merge_browser_issues(report: QualityReport, browser_issues: list[dict]) -> None:
@@ -251,7 +328,7 @@ def generate(
         except Exception as exc:  # noqa: BLE001 - AI is optional
             log.warning("AI classification skipped: %s", exc)
             result.notes.append(f"AI analysis was skipped: {getattr(exc, 'message', exc)}")
-    usable = [a for a in assets if a.is_visual and not a.excluded]
+    usable = [a for a in assets if a.is_visual and not a.excluded and a.effective_kind != "reference"]
     if not usable:
         raise ScriptError("There are no usable images or videos in this project yet. Import some assets first.")
     tracker.update(1.0, f"{len(usable)} visual asset(s) analysed")
@@ -282,10 +359,21 @@ def generate(
     ctx = PlanningContext(project.name, assets, directives, direction)
     specs = proposal_specs(request, directives.families_allowed)
     plans = []
+    concepts = [s.family for s in specs]
     for i, spec in enumerate(specs):
         token.raise_if_cancelled()
         try:
-            plan = build_plan(ctx, spec)
+            plan = None
+            if ai_service is not None and request.use_ai and hasattr(ai_service, "direct_plan"):
+                tracker.update(i / len(specs), f"AI creative direction: {family_info(spec.family).name}")
+                try:
+                    plan = ai_service.direct_plan(project, ctx, spec, concepts)
+                except Exception as exc:  # noqa: BLE001 - the offline director always works
+                    log.warning("AI director failed for %s: %s", spec.family, exc)
+                if plan is not None:
+                    result.ai_used = True
+            if plan is None:
+                plan = build_plan(ctx, spec)
             if ai_service is not None and request.use_ai:
                 try:
                     if ai_service.write_copy(project, plan, directives, direction):
@@ -320,6 +408,8 @@ def generate(
             pres = compose(plan, by_id, direction, spec)
             report = validate_presentation(pres, by_id, plan)
             proposal = ProposalData(spec, plan, direction, pres, report, list(plan.notes), dict(sources))
+            director = (plan.sections[0].meta.get("director") or {}) if plan.sections else {}
+            proposal.sources["director"] = director.get("source", "local") if is_concept(spec.family) else "classic"
             if report.errors:
                 proposal = revise(proposal, by_id)
             proposals.append(proposal)
@@ -335,10 +425,13 @@ def generate(
     staging = project.cache_subdir("staging") / f"gen-{int(time.time() * 1000)}"
     staging.mkdir(parents=True, exist_ok=True)
     browser_issues: dict[int, list[dict]] = {}
+    critique_wanted = bool(ai_service is not None and request.use_ai and getattr(ai_service, "settings", None) is not None
+                           and ai_service.settings.ai.use_for_evaluation and getattr(ai_service, "images_allowed", False))
     if request.render_previews and proposals:
         jobs = [(p.presentation, staging / f"{i}-thumb.jpg", staging / f"{i}-strip.jpg") for i, p in enumerate(proposals)]
+        captures = {i: staging / f"{i}-capture.jpg" for i in range(len(proposals))} if critique_wanted else None
         try:
-            browser_issues = render_previews(project, jobs, token, lambda f, m: tracker.update(f, m), request.browser_path)
+            browser_issues = render_previews(project, jobs, token, lambda f, m: tracker.update(f, m), request.browser_path, captures=captures)
         except OperationCancelled:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -354,6 +447,18 @@ def generate(
             raise
         except Exception as exc:  # noqa: BLE001 - refinement is best effort
             log.warning("Rendered refinement skipped: %s", exc)
+
+    # 7c ── optional AI critique of the rendered sections (one bounded round)
+    if critique_wanted and request.render_previews and proposals:
+        try:
+            if refine_with_critique(project, proposals, browser_issues, staging, by_id, ai_service, request.browser_path, token,
+                                    lambda m: tracker.update(1.0, m)):
+                result.ai_used = True
+        except OperationCancelled:
+            raise
+        except Exception as exc:  # noqa: BLE001 - critique is optional
+            log.warning("AI critique skipped: %s", exc)
+            result.notes.append(f"AI critique was skipped: {getattr(exc, 'message', exc)}")
 
     # 8 ── validate
     tracker.start("validate", STAGE_LABELS["validate"])
@@ -395,6 +500,9 @@ def generate(
         status = getattr(ai_service, "status", None)
         if callable(status) and not result.ai_used:
             result.notes.append(status())
+        usage = getattr(ai_service, "usage_note", None)
+        if callable(usage) and usage():
+            result.notes.append(usage())
     result.elapsed = time.monotonic() - started
     tracker.update(1.0, f"{len(result.versions)} proposal(s) ready")
     log.info("Generated %d proposal(s) for %s in %.1fs (%d failure(s))", len(result.versions), project.name, result.elapsed, len(result.failures))

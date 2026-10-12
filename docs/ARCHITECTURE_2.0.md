@@ -110,7 +110,7 @@ decision does not close that door.
 | M1 | Asset *nature* (photograph / finished artwork / brand element / document) + strongest-asset selection | **done** (heuristic) |
 | M1 | Creative Director (local) + module engine + five concepts as the new default | **done** |
 | M1 | Rendered QA loop (render → measure → fix → re-render) | **done** (technical checks) |
-| M2 | AI Creative Director and AI visual critique via providers (structured output, budgets, cost estimates) | planned |
+| M2 | AI Creative Director and AI visual critique via providers (structured output, budgets, cost estimates) | **done** (mock-tested; see `docs/AI_PROVIDERS.md`) |
 | M2 | Local vision model (CLIP via ONNX Runtime, GPU) for genuine offline asset understanding | planned — model download needs network access to the model host |
 | M3 | Visual editor overlay on the spec; workflow UI (Import → Analyse → Generate → Compare → Export) | planned (ZIP import done) |
 | M4 | Optional mockup compositing and image-generation providers | planned |
