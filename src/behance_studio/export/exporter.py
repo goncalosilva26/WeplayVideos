@@ -46,6 +46,7 @@ FORMATS = {
     "html": "HTML package",
     "zip": "ZIP package",
     "text": "Presentation text (Markdown)",
+    "canva": "Canva — editable design (PowerPoint)",
 }
 RASTER = {"jpg": "JPEG", "png": "PNG", "webp": "WEBP", "tiff": "TIFF"}
 # Practical single-image height limits (output pixels).
@@ -350,13 +351,16 @@ def export_versions(
                             path = unique_path(tbase.with_name(tbase.name + " - text.md"))
                             atomic_write_text(path, presentation_text(pres))
                             out = ExportOutput("text", [path], True, "Text")
+                        elif fmt == "canva":
+                            out = _export_canva(project, vid, target_dir, options, token)
                         elif fmt == "zip":
                             out = _zip_outputs(produced, unique_path(destination / f"{base.name}.zip"), base.name)
                         else:  # pragma: no cover
                             continue
                         if not (zip_only and fmt != "zip"):
                             report.outputs.append((record.name, out))
-                            project.record_export(ExportRecord(id=new_id(), version_id=vid, format=fmt, path=str(out.paths[0]), details={"files": [str(p) for p in out.paths]}))
+                            if fmt != "canva":  # the Canva export records itself
+                                project.record_export(ExportRecord(id=new_id(), version_id=vid, format=fmt, path=str(out.paths[0]), details={"files": [str(p) for p in out.paths]}))
                         produced.append(out)
                     except OperationCancelled:
                         raise
@@ -381,8 +385,24 @@ def export_versions(
     return report
 
 
+def _export_canva(project, version_id: str, target_dir: Path, options: ExportOptions, token: CancelToken) -> ExportOutput:
+    """Canva-ready PowerPoint file (no upload here; see the Export to Canva dialog)."""
+    from behance_studio.canva.export import CanvaOptions, export_to_canva
+
+    canva = export_to_canva(project, [version_id], CanvaOptions(
+        destination=target_dir, quality=options.quality, section_ids=options.section_ids, check=False,
+        browser_path=options.browser_path, filename_pattern=options.filename_pattern), token=token)
+    if canva.cancelled:
+        raise OperationCancelled("Export cancelled")
+    if not canva.designs:
+        raise ExportError(canva.failures[0][1] if canva.failures else "The Canva file could not be created.")
+    d = canva.designs[0]
+    return ExportOutput("canva", [d.pptx, d.report], True, f"{d.pages} page(s), editable in Canva")
+
+
 def _zip_outputs(outputs: list[ExportOutput], zip_path: Path, root: str) -> ExportOutput:
-    folders = {"pdf": "PDF", "pdf_a4": "PDF", "jpg": "Images", "png": "Images", "webp": "Images", "tiff": "Images", "html": "HTML", "text": "Text"}
+    folders = {"pdf": "PDF", "pdf_a4": "PDF", "jpg": "Images", "png": "Images", "webp": "Images", "tiff": "Images", "html": "HTML", "text": "Text",
+               "canva": "Canva"}
     tmp = zip_path.with_name(f".{zip_path.name}.partial")
     count = 0
     with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:

@@ -111,8 +111,9 @@ class GalleryPage(QWidget):
         self.btn_open = button("Open", "eye", "Ghost", on_click=self._open_selected)
         self.btn_compare = button("Compare", "compare", on_click=self._compare)
         self.btn_export = button("Export", "export", on_click=lambda: self.state.export_versions.emit(sorted(self.selected)))
+        self.btn_canva = button("Export to Canva", "external", "Ghost", on_click=self._canva)
         self.btn_trash = button("Move to Trash", "trash", "Danger", on_click=self._trash_selected)
-        for b in (self.btn_open, self.btn_compare, self.btn_export, self.btn_trash):
+        for b in (self.btn_open, self.btn_compare, self.btn_export, self.btn_canva, self.btn_trash):
             actions_bar.addWidget(b)
         root.addLayout(actions_bar)
 
@@ -193,6 +194,7 @@ class GalleryPage(QWidget):
         self.btn_open.setEnabled(n == 1)
         self.btn_compare.setEnabled(2 <= n <= 3)
         self.btn_export.setEnabled(n >= 1)
+        self.btn_canva.setText("Export to Canva" if n else "Export project to Canva")
         self.btn_trash.setEnabled(n >= 1)
 
     def _open_selected(self) -> None:
@@ -228,9 +230,16 @@ class GalleryPage(QWidget):
         menu.addAction(icon("flag"), "Set as preferred version", lambda: (manager.set_preferred(record.id), self.state.touch_library(), self.refresh()))
         menu.addAction(icon("star"), "Remove from favourites" if record.favorite else "Add to favourites", lambda: self._favorite(record.id, not record.favorite))
         menu.addAction(icon("export"), "Export…", lambda: self.state.export_versions.emit([record.id]))
+        menu.addAction(icon("external"), "Export to Canva…", lambda: self.state.export_canva.emit([record.id]))
         menu.addSeparator()
         menu.addAction(icon("trash"), "Move to Trash", lambda: (manager.trash([record.id]), self.selected.discard(record.id), self.state.versions_changed.emit()))
         menu.exec(pos)
+
+    def _canva(self) -> None:
+        """Selected proposals, or the whole project when none is selected."""
+        ids = sorted(self.selected) or [v.id for v in self.state.versions.list()]
+        if ids:
+            self.state.export_canva.emit(ids)
 
     def _rename(self, record: VersionRecord) -> None:
         name, ok = QInputDialog.getText(self, "Rename proposal", "Name", text=record.name)

@@ -8,6 +8,8 @@
     behance-studio trash / restore / purge <project> <number>...
     behance-studio demo    <folder>          create the Butter & Bean demo project and generate it
     behance-studio doctor                    check the environment
+    behance-studio canva-export <project> [--version all|preferred|<number>] [--out <folder>] [--upload] [--combine]
+    behance-studio canva-connect / canva-status / canva-disconnect   link Behance Studio to your Canva account
 """
 
 from __future__ import annotations
@@ -24,7 +26,8 @@ from behance_studio.core.qtsupport import ensure_gui_application
 from behance_studio.core.settings import get_settings_store
 from behance_studio.core.tasks import ProgressEvent
 
-COMMANDS = {"create", "import", "generate", "list", "export", "trash", "restore", "purge", "demo", "doctor", "ai-check", "diagnose"}
+COMMANDS = {"create", "import", "generate", "list", "export", "trash", "restore", "purge", "demo", "doctor", "ai-check", "diagnose",
+            "canva-export", "canva-connect", "canva-status", "canva-disconnect"}
 
 
 def _progress(event: ProgressEvent) -> None:
@@ -177,6 +180,101 @@ def cmd_export(args) -> int:
         print(f"  FAILED {name} {fmt}: {msg}")
     print(report.summary())
     return 0 if not report.failures else 2
+
+
+def cmd_canva_export(args) -> int:
+    from behance_studio.canva.connect import CanvaConnect
+    from behance_studio.canva.export import CanvaOptions, export_to_canva
+
+    project = _open(args.project)
+    settings = get_settings_store().settings
+    ids = _select_versions(project, args.version)
+    client = None
+    if args.upload:
+        client = CanvaConnect.from_settings(settings)
+        if not client.connected:
+            print("Not connected to Canva: run 'canva-connect' first (the file is still created).", file=sys.stderr)
+            client = None
+    options = CanvaOptions(
+        destination=Path(args.out) if args.out else project.exports_dir,
+        page_height=args.page_height or settings.canva.page_height or None,
+        mode="editable" if args.editable else settings.canva.mode,
+        quality=args.quality or settings.canva.quality,
+        combine=args.combine, upload=client is not None, check=not args.no_check,
+        check_with_libreoffice=args.libreoffice, browser_path=settings.browser_path,
+    )
+    report = export_to_canva(project, ids, options, client=client, progress=lambda f, m: _progress(ProgressEvent("canva", f, m)))
+    print()
+    for d in report.designs:
+        check = f", check {d.similarity * 100:.1f}%" if d.similarity is not None else ""
+        office = f", LibreOffice {d.office_similarity * 100:.1f}%" if d.office_similarity is not None else ""
+        print(f"  {d.name}: {d.pptx} ({d.pages} pages of {d.page_size[0]}x{d.page_size[1]} px, {d.size_bytes / 1e6:.1f} MB{check}{office})")
+        print(f"      report: {d.report}")
+        if d.edit_url:
+            print(f"      open in Canva: {d.edit_url}")
+    for name, msg in report.failures:
+        print(f"  PROBLEM {name}: {msg}")
+    print(report.summary())
+    return 0 if report.designs and not report.failures else 2
+
+
+def cmd_canva_connect(args) -> int:
+    from behance_studio.canva.connect import CanvaConnect
+
+    store = get_settings_store()
+    s = store.settings.canva
+    if args.client_id:
+        s.client_id = args.client_id.strip()
+    if args.port:
+        s.redirect_port = args.port
+    if args.client_secret:
+        CanvaConnect.store_client_secret(args.client_secret)
+    store.save()
+    client = CanvaConnect.from_settings(store.settings)
+    print(f"Redirect URL to add to your Canva integration: {client.redirect_uri}")
+
+    def show(url: str) -> None:
+        import webbrowser
+
+        print(f"Opening Canva to approve access (if no browser opens, visit):\n  {url}")
+        webbrowser.open(url)
+
+    name = client.authorize(open_url=show)
+    s.account_name = name
+    store.save()
+    print(f"Connected to Canva{' as ' + name if name else ''}.")
+    return 0
+
+
+def cmd_canva_status(args) -> int:
+    from behance_studio.canva.connect import CanvaConnect
+
+    settings = get_settings_store().settings
+    client = CanvaConnect.from_settings(settings)
+    print(f"Client ID:     {client.client_id or '(not set)'}")
+    print(f"Client secret: {'stored' if client.client_secret else '(not set)'}")
+    print(f"Redirect URL:  {client.redirect_uri}")
+    if not client.connected:
+        print("Status:        not connected (run canva-connect)")
+        return 1
+    try:
+        name = client.profile_name()
+        print(f"Status:        connected{' as ' + name if name else ''}")
+        return 0
+    except UserFacingError as exc:
+        print(f"Status:        {exc.message}")
+        return 2
+
+
+def cmd_canva_disconnect(args) -> int:
+    from behance_studio.canva.connect import CanvaConnect
+
+    store = get_settings_store()
+    CanvaConnect.from_settings(store.settings).disconnect()
+    store.settings.canva.account_name = ""
+    store.save()
+    print("Disconnected from Canva (the Client ID and secret are kept; designs in Canva are not affected).")
+    return 0
 
 
 def cmd_trash(args) -> int:
@@ -368,6 +466,27 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--long-images", choices=["auto", "continuous", "segments", "sections"])
     p.add_argument("--a4-margins", action="store_true")
     p.set_defaults(func=cmd_export)
+    p = sub.add_parser("canva-export", help="create Canva-editable PowerPoint files (and upload them to Canva with --upload)")
+    p.add_argument("project")
+    p.add_argument("--version", default="preferred")
+    p.add_argument("--out")
+    p.add_argument("--page-height", type=int, help="page height in px (default: chosen automatically)")
+    p.add_argument("--editable", action="store_true", help="keep masks and gradients as PowerPoint properties instead of drawing them")
+    p.add_argument("--quality", choices=["standard", "high", "maximum"])
+    p.add_argument("--combine", action="store_true", help="all chosen proposals in one Canva design")
+    p.add_argument("--upload", action="store_true", help="import into your Canva account (after canva-connect)")
+    p.add_argument("--no-check", action="store_true", help="skip the comparison with the original")
+    p.add_argument("--libreoffice", action="store_true", help="also render the .pptx with LibreOffice (when installed) and compare")
+    p.set_defaults(func=cmd_canva_export)
+    p = sub.add_parser("canva-connect", help="connect your Canva account (Canva Connect API integration)")
+    p.add_argument("--client-id")
+    p.add_argument("--client-secret")
+    p.add_argument("--port", type=int)
+    p.set_defaults(func=cmd_canva_connect)
+    p = sub.add_parser("canva-status")
+    p.set_defaults(func=cmd_canva_status)
+    p = sub.add_parser("canva-disconnect")
+    p.set_defaults(func=cmd_canva_disconnect)
     for name in ("trash", "restore", "purge"):
         p = sub.add_parser(name)
         p.add_argument("project")

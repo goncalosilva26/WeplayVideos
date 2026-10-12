@@ -25,6 +25,7 @@ datas = [
     (os.path.join(ROOT, "tools", "make_demo_assets.py"), "tools"),
     (os.path.join(ROOT, "docs", "USER_GUIDE.md"), "docs"),
     (os.path.join(ROOT, "docs", "AI_PROVIDERS.md"), "docs"),
+    (os.path.join(ROOT, "docs", "CANVA.md"), "docs"),
 ]
 binaries = []
 hiddenimports = collect_submodules("behance_studio") + [
@@ -33,7 +34,7 @@ hiddenimports = collect_submodules("behance_studio") + [
     "keyring.backends.macOS",
     "send2trash",
 ]
-for package in ("playwright", "imageio_ffmpeg"):  # the Playwright driver and the FFmpeg binary are data files
+for package in ("playwright", "imageio_ffmpeg", "pptx"):  # Playwright driver, FFmpeg binary, PowerPoint templates are data files
     d, b, h = collect_all(package)
     datas += d
     binaries += b

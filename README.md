@@ -9,7 +9,8 @@ Projects**. No brief, script, categorising or layout choices are required:
 Behance Studio analyses the material, selects the strongest assets, and a
 Creative Director plans **five complete, differently art-directed case
 studies**. Compare them side by side, choose one, refine it if you like, and
-export to PDF, images, an HTML package or a ZIP. A creative brief
+export to PDF, images, an HTML package or a ZIP — or **export to Canva** as an
+editable design (every text box, picture and shape separate). A creative brief
 (`brief.txt`) and a detailed script (`GUIAO_PROJETO.txt`) remain optional
 advanced inputs.
 
@@ -77,6 +78,7 @@ On Linux/macOS (development only): `./run.sh setup`, `./run.sh test`, `./run.sh`
 * [User guide](docs/USER_GUIDE.md) — workflow, brief and script formats, editing, exporting
 * [Windows distribution](docs/WINDOWS_INSTALLER.md) — `build_windows.bat`: portable folder + Inno Setup installer
 * [Free local AI with Ollama](docs/LOCAL_AI.md) — model choice for an RTX 3060 12 GB, Windows setup, `LocalAI_Check.bat`
+* [Export to Canva](docs/CANVA.md) — how proposals become editable Canva designs, connecting a Canva account, verified fidelity and limitations
 * [AI providers](docs/AI_PROVIDERS.md) — optional OpenAI-compatible, Anthropic and local models; AI director and critique; privacy, costs and limits
 * [Architecture](docs/ARCHITECTURE.md) — how the pipeline, layout engine and renderer work
 * [Development status](DEVELOPMENT_STATUS.md) — what is complete, partial and pending

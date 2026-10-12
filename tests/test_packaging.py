@@ -26,7 +26,8 @@ def test_spec_and_installer_agree():
     assert r"..\dist\BehanceStudio\*" in iss and '#define AppExe "BehanceStudio.exe"' in iss
     icon = re.search(r"SetupIconFile=\.\.\\(.+)", iss).group(1).strip().replace("\\", "/")
     assert (ROOT / icon).is_file()
-    for rel in ("tools/make_demo_assets.py", "docs/USER_GUIDE.md", "docs/AI_PROVIDERS.md", "src/behance_studio/resources/fonts"):
+    assert '"pptx"' in spec  # python-pptx ships its default template as data
+    for rel in ("tools/make_demo_assets.py", "docs/USER_GUIDE.md", "docs/AI_PROVIDERS.md", "docs/CANVA.md", "src/behance_studio/resources/fonts"):
         assert (ROOT / rel).exists(), rel
     # Uninstall must never touch user data: no [UninstallDelete] outside {app}.
     assert "[UninstallDelete]" not in iss or "{userappdata}" not in iss.split("[UninstallDelete]")[1]

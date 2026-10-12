@@ -1,6 +1,6 @@
 # Development status
 
-_Last updated: 2026-10-12 · version 2.0.0.dev1 (section association fix 2.2) · branch `claude/behance-studio-windows-app-o0z32d`_
+_Last updated: 2026-10-12 · version 2.0.0.dev1 (Export to Canva 2.3) · branch `claude/behance-studio-windows-app-o0z32d`_
 
 This file is the persistent record of what exists, what was verified and what
 is still open. Update it at every milestone.
@@ -41,6 +41,56 @@ and `docs/samples/v2/` (the five 2.0 concepts, same synthetic fixture).
 | Section check: misplaced images moved to a section of their kind (never swapped or dropped; script sections only reported) + `section_mismatch` warning; offline director no longer labels mixed imagery "Photography" | **Done** | `tests/test_ollama.py`; all 11 families checked on the fixture: 0 mismatches |
 | Ollama as default provider (settings migration "none" → "ollama"; paid choices untouched) | **Done** | `tests/test_ollama.py` |
 | **Real model** (Qwen3-VL etc.) | **Not verified here** — ollama.com and registry.ollama.ai are blocked by this environment's network policy and there is no GPU. `tests/test_ollama_live.py` and `ai-check --test` run the real checks on a PC with Ollama. | — |
+
+### Export to Canva — 2.3
+
+Design and method: [docs/CANVA.md](docs/CANVA.md). Investigation result:
+Canva's Connect API **design import** (`POST /v1/imports`) and Canva's own
+*Import file* turn a PowerPoint file into a native, editable Canva design;
+the other official routes either cannot create editable elements from a
+desktop app (create design, image-to-design), need Canva Enterprise
+(autofill/brand templates), or require an app running inside the Canva
+editor (Apps SDK). canva.dev was not reachable from this environment: the API
+details come from Canva's documentation as found by web search (sources in
+CANVA.md).
+
+| Area | Status | Verified by |
+| --- | --- | --- |
+| Design Spec → scene of editable primitives (text boxes with exact typography and line breaks, pictures with lossless crop, shapes, gradients, outlines, shadows, rotation, opacity, device frames rebuilt from shapes, section backgrounds); per-layer drawing of effects with no editable equivalent (fade, filter, tint, perspective, pattern, blend over plain backgrounds); "exact look" and "maximum editability" modes; alpha bleeding against halos | **Done** | `tests/test_canva.py::test_every_layer_becomes_its_own_editable_element` (all 11 families), `test_effects_are_reproduced_on_their_own_element` (every effect, both modes) |
+| Body paragraphs re-wrap naturally when edited (width computed so the designed lines come out again, ±3.5 % tolerance); headlines keep their designed breaks without re-wrapping | **Done** | readback test (wrap mode per text box) |
+| Pagination into pages of one size (automatic 1000–2600 px or chosen), no cut through text/rotated/masked elements, seamless picture/background splits, section/page map in report and slide notes, ≤ 100 pages | **Done** | `test_pages_have_one_size_and_never_cut_text` (all 11 families) |
+| PowerPoint writer (native text boxes/pictures/shapes, no theme styles, notes, size/page checks, verified after writing) | **Done** | `test_pptx_is_native_and_matches_the_scene` (python-pptx readback: kinds, order, position ±1 EMU, rotation, font, size, bold, colour, crop, wrap) |
+| Fidelity check: original (Chromium) vs exported pages (conversion) and vs LibreOffice's rendering of the .pptx | **Done** | `test_effects_conversion_matches_the_original`, `test_pptx_rendered_by_libreoffice_matches_the_original`; full table below |
+| Canva Connect client: OAuth 2.0 + PKCE (S256) via 127.0.0.1 loopback, Basic client auth, rotating refresh tokens in the credential vault, import job + polling, 429/5xx retry, 401 refresh, explained failures, revoke | **Done — tested against a local stand-in only** | `test_connect_with_pkce_and_import_a_design`, `test_connect_refusals_are_explained` (`tests/canva_mock.py`) |
+| Export to Canva dialog (proposals or whole project, combined design, page size, mode, quality, check, upload/manual), Settings → Canva, Viewer/Proposals buttons, Export Center format, CLI `canva-export`/`canva-connect`/`canva-status`/`canva-disconnect`, report, scene JSON, fonts with licences, export history | **Done** | `test_export_to_canva_end_to_end`, `test_export_center_offers_canva`, `test_cli_canva_export`, `test_export_dialog_and_settings_panel`; dialog and panel screenshots reviewed |
+| Frozen build (PyInstaller) exports to Canva | **Done — Linux** | one-folder build run: `BehanceStudio-cli canva-export` → 11 pages, check 99.7 % |
+| **Canva's real import and rendering; a real Canva account/integration** | **Not verified** — canva.com and api.canva.com are blocked here; no Canva account | — |
+
+Measured on the synthetic Butter & Bean project (default "exact look"; the
+"maximum editability" mode gives the same figures within ±0.2 points). Share
+of the page area without a visible difference to the original presentation:
+
+| Family | Conversion | LibreOffice renders the .pptx |
+| --- | --- | --- |
+| Minimal Editorial | 100.0 % | 99.7 % |
+| Bold Graphic | 99.7 % | 99.2 % |
+| Premium Photographic | 99.7 % | 99.3 % |
+| Layered Experimental | 99.7 % | 99.5 % |
+| Immersive Story | 100.0 % | 98.2 % |
+| Editorial | 100.0 % | 98.9 % |
+| Cinematic | 99.5 % | 98.7 % |
+| Split | 99.6 % | 98.5 % |
+| Posters | 95.8 % | 91.1 % |
+| Gallery | 100.0 % | 99.7 % |
+| Modular | 99.7 % | 98.4 % |
+
+Posters is lowest because its display type is Fraunces at weight 850, which a
+PowerPoint file can only store as bold, and LibreOffice draws Fraunces
+without its optical-size axis (wider letters; a headline then runs past the
+page edge in LibreOffice because the box does not re-wrap). Remaining
+differences elsewhere: soft-shadow spread (LibreOffice ignores the shadow
+scale), weights 500/600/800 shown as regular/bold, a few pixels of baseline
+difference between text engines.
 
 ### Section association fix — 2.2
 
@@ -257,6 +307,9 @@ Latest results: see "Last test runs" at the end of this file.
 
 ### Last test runs (2026-10-12, Linux, Python 3.14.6)
 
+* After Export to Canva (2.3): full suite **211 passed, 2 skipped** in 8 min 41 s
+  (the skips are the live Ollama tests). `tests/test_canva.py`: 13 passed,
+  including the LibreOffice fidelity test (LibreOffice 24.2 + pdftoppm present).
 * After the section association fix (2.2): full suite **198 passed,
   2 skipped** in 4 min 27 s. The two skipped tests are
   `tests/test_ollama_live.py` (they need a real Ollama with a vision model,

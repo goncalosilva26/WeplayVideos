@@ -217,6 +217,13 @@ class SettingsPage(QWidget):
         form.addRow("", test_row)
         root.addLayout(form)
 
+        # ------------------------------------------------------------ Canva
+        root.addWidget(section_title("Canva"))
+        from behance_studio.ui.widgets.canva_panel import CanvaPanel
+
+        self.canva_panel = CanvaPanel(state, toast)
+        root.addWidget(self.canva_panel)
+
         # ------------------------------------------------------- performance
         root.addWidget(section_title("Performance & storage"))
         form = QFormLayout()
@@ -559,6 +566,7 @@ class SettingsPage(QWidget):
         s.ai.price_output_per_mtok = round(self.price_out.value(), 4)
         s.ai.confirm_paid_runs = self.confirm_paid.isChecked()
         s.worker_threads = self.threads.value()
+        self.canva_panel.save()
         if self.api_key.text().strip():
             where = set_api_key(s.ai.provider, self.api_key.text().strip())
             self.api_key.clear()

@@ -39,6 +39,8 @@ FORMAT_HELP = {
     "html": "A self-contained web page with animations and video.",
     "zip": "One portable package with the formats above.",
     "text": "All presentation text as Markdown.",
+    "canva": "A PowerPoint file Canva imports as an editable design (text, pictures and shapes stay separate). "
+             "Use 'Export to Canva' in the viewer to upload it to your Canva account directly.",
 }
 
 

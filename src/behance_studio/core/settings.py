@@ -62,6 +62,21 @@ class ExportDefaults:
 
 
 @dataclass
+class CanvaSettings:
+    # Canva Connect integration created by the user in Canva's Developer Portal.
+    # The client secret and tokens live in the credential vault, never here.
+    client_id: str = ""
+    redirect_port: int = 51723
+    account_name: str = ""  # shown in Settings after connecting
+    page_height: int = 0  # 0 = automatic
+    mode: str = "exact"  # exact | editable
+    quality: str = "high"  # standard | high | maximum (picture resolution)
+    upload: bool = True  # upload to Canva when connected
+    open_after: bool = True  # open the design (or the folder) when done
+    check: bool = True  # compare the exported pages with the original
+
+
+@dataclass
 class AppSettings:
     projects_dir: str = ""
     copy_assets_on_import: bool = True
@@ -76,6 +91,7 @@ class AppSettings:
     reduce_motion: bool = False
     ai: AISettings = field(default_factory=AISettings)
     export: ExportDefaults = field(default_factory=ExportDefaults)
+    canva: CanvaSettings = field(default_factory=CanvaSettings)
     window_geometry: str = ""
     last_import_dir: str = ""
     last_export_dir: str = ""

@@ -163,6 +163,7 @@ class MainWindow(QMainWindow):
         s.open_version.connect(self._open_version)
         s.compare_versions.connect(self._compare)
         s.export_versions.connect(self._export)
+        s.export_canva.connect(self._export_canva)
         s.project_changed.connect(self._project_changed)
         s.assets_changed.connect(self._update_chip)
         s.versions_changed.connect(self._update_chip)
@@ -209,6 +210,13 @@ class MainWindow(QMainWindow):
     def _export(self, ids: list) -> None:
         self.pages["export"].preselect(list(ids))
         self.show_page("export")
+
+    def _export_canva(self, ids: list) -> None:
+        if self.state.project is None:
+            return
+        from behance_studio.ui.dialogs.canva_export import CanvaExportDialog
+
+        CanvaExportDialog(self.state, list(ids), self, toast=self.toast).exec()
 
     def _project_changed(self, project) -> None:
         for page_id, _t, _i, needs, _s in NAV:

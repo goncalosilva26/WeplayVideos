@@ -226,11 +226,25 @@ written; existing files are never overwritten (a ` (2)` suffix is added).
 | HTML package | A self-contained folder (`index.html` + assets + fonts) that works offline; videos and animated GIFs play. |
 | ZIP | The selected formats (PDF + HTML + text if only ZIP is chosen) in one archive. |
 | Presentation text | All titles and texts as Markdown, for proofreading or reuse. |
+| Canva — editable design | A PowerPoint file Canva imports as an editable design (see below). |
 
 Width defaults to 1400 px (Behance's content width). Image quality renders at
 1× (*Standard*), 1.6× (*High*, default) or 2.4× (*Maximum*) pixel density;
 PDF text stays vector at any setting. A section subset can be exported when one proposal is
 selected.
+
+### Export to Canva
+
+**Canva** in the Viewer, **Export to Canva** in Proposals (selected proposals,
+or the whole project when none is selected) or the proposal's right-click
+menu. Every text box, picture and shape becomes its own editable element in
+Canva, positioned as in the proposal; long presentations are split into
+pages of one size without cutting text. Then either open it in your Canva
+account automatically (after connecting Canva in Settings, optional) or drag
+the saved `.pptx` onto canva.com. A report next to the file lists the pages
+and sections, the visual match with the original and anything Canva cannot
+reproduce exactly (e.g. font weights other than regular/bold). Details,
+limitations and how the integration works: [CANVA.md](CANVA.md).
 
 ## 9. Settings
 
@@ -240,6 +254,8 @@ selected.
 * **Rendering** — the Chromium/Edge executable (automatic by default) with a
   *Test* button.
 * **AI assistance** — optional; see [AI_PROVIDERS.md](AI_PROVIDERS.md).
+* **Canva** — optional connection to your Canva account (Client ID and secret of
+  a Canva Connect integration); see [CANVA.md](CANVA.md).
 * **Performance & storage** — worker threads, project cache size and cleanup.
 * **Diagnostics** — environment report and the log folder for support.
 

@@ -401,6 +401,8 @@ class ViewerPage(QWidget):
         self.fam_btn.setMenu(fam_menu)
         bl.addWidget(self.fam_btn)
         bl.addWidget(button("Preferred", "flag", "Ghost", on_click=self._set_preferred, tooltip="Mark as the preferred / final version"))
+        bl.addWidget(button("Canva", "external", "Ghost", tooltip="Export to Canva as an editable design",
+                            on_click=lambda: self.version_id and self.state.export_canva.emit([self.version_id])))
         bl.addWidget(button("Export", "export", "Primary", on_click=lambda: self.version_id and self.state.export_versions.emit([self.version_id])))
         root.addWidget(bar)
 

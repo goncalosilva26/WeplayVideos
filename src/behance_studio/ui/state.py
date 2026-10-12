@@ -22,6 +22,7 @@ class AppState(QObject):
     open_version = Signal(str)  # request to show a version in the viewer
     compare_versions = Signal(list)
     export_versions = Signal(list)
+    export_canva = Signal(list)  # open the Export to Canva dialog for these versions
     navigate = Signal(str)  # page id
     busy_changed = Signal(bool)
     local_ai_changed = Signal(object)  # OllamaStatus | None
