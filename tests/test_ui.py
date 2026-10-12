@@ -25,13 +25,39 @@ def pump(ms: int) -> None:
 def wait_idle(state, timeout: float = 120) -> None:
     start = time.time()
     pump(50)
-    while state.runner.busy and time.time() - start < timeout:
+    while state.runner.busy:
+        if time.time() - start > timeout:
+            raise AssertionError(f"background work did not finish within {timeout:.0f}s")
         pump(50)
     pump(100)
 
 
 @pytest.fixture
-def window(qapp):
+def dialogs(qapp):
+    """Closes modal message boxes (which would block the test) and records them."""
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
+
+    seen: list[str] = []
+
+    def sweep() -> None:
+        for widget in QApplication.topLevelWidgets():
+            if isinstance(widget, QMessageBox) and widget.isVisible():
+                seen.append(f"{widget.windowTitle()}: {widget.text()} {widget.informativeText()}".strip())
+                widget.reject()
+            elif isinstance(widget, QDialog) and widget.isModal() and widget.isVisible() and type(widget).__name__ != "ProgressDialog":
+                seen.append(f"dialog {type(widget).__name__}")
+                widget.reject()
+
+    timer = QTimer()
+    timer.timeout.connect(sweep)
+    timer.start(100)
+    yield seen
+    timer.stop()
+
+
+@pytest.fixture
+def window(qapp, dialogs):
     from behance_studio.ui.main_window import MainWindow
     from behance_studio.ui.state import AppState
 
@@ -59,7 +85,7 @@ def test_window_without_project(window):
 
 
 @pytest.mark.skipif(not browser_available(), reason="needs a Chromium-based browser")
-def test_full_workflow(window, projects_dir, demo_assets_dir):
+def test_full_workflow(window, dialogs, projects_dir, demo_assets_dir):
     state = window.state
     project = Project.create(projects_dir, "UI Test")
     import_paths(project, [demo_assets_dir])
@@ -123,3 +149,4 @@ def test_full_workflow(window, projects_dir, demo_assets_dir):
     trash.rows[0].check.setChecked(True)
     trash._restore()
     assert len(state.versions.list()) == 2 and not state.versions.trashed()
+    assert dialogs == []  # no error or warning dialog appeared during the workflow

@@ -38,7 +38,7 @@ def setup_logging(level: int = logging.INFO, console: bool = False) -> None:
         root.addHandler(handler)
     except OSError:  # pragma: no cover - read-only profile, etc.
         pass
-    if console:
+    if console and sys.stderr is not None:  # pythonw.exe has no console
         stream = logging.StreamHandler(sys.stderr)
         stream.setFormatter(fmt)
         root.addHandler(stream)

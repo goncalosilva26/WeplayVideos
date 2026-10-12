@@ -214,7 +214,7 @@ def test_ai_classification_copy_and_cache(ai_settings, mock_ai, projects_dir, de
     project.save_asset(target)
 
     service = service_for_project(project, ai_settings)
-    result = generate(project, GenerationRequest(families=["editorial", "posters"], count=2), ai_service=service)
+    result = generate(project, GenerationRequest(families=["editorial", "posters"], count=2, seed=7), ai_service=service)
     assert result.ai_used and len(result.versions) == 2
     sent = images_sent(mock_ai)
     assert 0 < sent <= len(project.list_assets(visual_only=True))
@@ -240,10 +240,15 @@ def test_ai_classification_copy_and_cache(ai_settings, mock_ai, projects_dir, de
     assert all(not s.locked for s in ai_sections)
     del proposal
 
-    # Regenerating reuses the cache: no new requests.
+    # Regenerating identical content reuses the cache: no new requests at all.
     before = len(mock_ai.requests)
-    generate(project, GenerationRequest(families=["editorial", "posters"], count=2), ai_service=service_for_project(project, ai_settings))
-    assert len(mock_ai.requests) == before
+    generate(project, GenerationRequest(families=["editorial", "posters"], count=2, seed=7), ai_service=service_for_project(project, ai_settings))
+    assert mock_ai.requests[before:] == []
+    # A new variation may regroup sections (new copy drafts), but never re-sends previews or the brief.
+    before = len(mock_ai.requests)
+    generate(project, GenerationRequest(families=["editorial", "posters"], count=2, seed=8), ai_service=service_for_project(project, ai_settings))
+    repeated = [r for r in mock_ai.requests[before:] if "data:image/" in json.dumps(r["body"]) or "Rate the intended" in json.dumps(r["body"])]
+    assert repeated == []
 
     # The key never ends up in project files or exports.
     for path in project.root.rglob("*"):

@@ -91,6 +91,8 @@ class Provider:
         self.timeout = max(5.0, float(timeout))
         self.max_retries = max(0, min(5, int(max_retries)))
         self.requests_made = 0
+        # A server on this machine is contacted directly, never through a proxy.
+        self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({})) if is_loopback_url(self.base_url) else urllib.request.build_opener()
         scheme = urlparse(self.base_url).scheme
         if scheme not in ("http", "https"):
             raise ProviderError(f"The API address must start with https:// (got “{base_url}”).")
@@ -122,7 +124,7 @@ class Provider:
             request = urllib.request.Request(url, data=body, method=method, headers=self._headers())
             try:
                 self.requests_made += 1
-                with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                with self._opener.open(request, timeout=self.timeout) as response:
                     raw = response.read()
                 try:
                     return json.loads(raw.decode("utf-8"))

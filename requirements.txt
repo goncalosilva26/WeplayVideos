@@ -1,5 +1,5 @@
 # Behance Studio runtime dependencies (pinned, reproducible).
-# Verified on Python 3.14.6 and 3.13. Install with:  python -m pip install -r requirements.txt
+# Python 3.12-3.14 (64-bit). Windows wheels verified for all pins. Install: python -m pip install -r requirements.txt
 PySide6==6.12.0
 Pillow==12.3.0
 numpy==2.5.4

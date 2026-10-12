@@ -217,6 +217,9 @@ class AIService:
                             raise
                         log.warning("AI classification failed for %s: %s", asset.filename, exc.message)
                         continue
+                    except Exception as exc:  # noqa: BLE001 - one unreadable preview must not stop the rest
+                        log.warning("AI classification skipped %s: %s", asset.filename, exc)
+                        continue
                     progress(done / len(todo), f"AI recognised {done} of {len(todo)}")
                     if result and self._apply_classification(asset, result):
                         changed.append(asset)

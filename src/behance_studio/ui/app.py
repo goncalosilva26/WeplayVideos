@@ -24,6 +24,20 @@ def _windows_app_id() -> None:
             pass
 
 
+def _fatal(message: str) -> None:
+    """Report a startup failure even without a console (pythonw.exe)."""
+    log.critical(message)
+    if sys.stderr is not None:
+        print(message, file=sys.stderr)
+    if sys.platform.startswith("win"):
+        try:
+            import ctypes
+
+            ctypes.windll.user32.MessageBoxW(None, f"{message}\n\nLog: {log_file_path()}", APP_NAME, 0x10)
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def _excepthook(exc_type, exc, tb) -> None:
     log.critical("Unhandled exception:\n%s", "".join(traceback.format_exception(exc_type, exc, tb)))
     if issubclass(exc_type, KeyboardInterrupt):
@@ -68,24 +82,38 @@ def create_application(argv: list[str]):
 
 def run(argv: list[str] | None = None) -> int:
     argv = list(argv if argv is not None else sys.argv)
-    setup_logging()
+    setup_logging(console=bool(os.environ.get("BEHANCE_STUDIO_CONSOLE_LOG")))
     log.info("Starting %s %s (Python %s, %s)", APP_NAME, __version__, sys.version.split()[0], sys.platform)
     _windows_app_id()
     try:
         app = create_application(argv)
     except ImportError as exc:
-        print(f"{APP_NAME} could not start because a component is missing: {exc}", file=sys.stderr)
-        print("Run setup_windows.bat (or install requirements.txt) and try again.", file=sys.stderr)
         log.exception("Startup import failure")
+        _fatal(f"{APP_NAME} could not start because a component is missing ({exc}).\nRun setup_windows.bat again to repair the installation.")
         return 2
     sys.excepthook = _excepthook
 
     from behance_studio.ui.main_window import MainWindow
     from behance_studio.ui.state import AppState
 
-    state = AppState()
-    window = MainWindow(state)
+    try:
+        state = AppState()
+        window = MainWindow(state)
+    except Exception as exc:  # noqa: BLE001
+        log.exception("Main window failed to open")
+        _fatal(f"{APP_NAME} could not open its window: {exc}")
+        return 3
     window.show()
+
+    # Ctrl+C in a console (BehanceStudio_debug.bat) closes the window normally.
+    import signal
+
+    from PySide6.QtCore import QTimer
+
+    signal.signal(signal.SIGINT, lambda *_a: window.close())
+    heartbeat = QTimer()
+    heartbeat.timeout.connect(lambda: None)  # lets Python handle signals during the Qt loop
+    heartbeat.start(400)
 
     # Open a project folder passed on the command line (e.g. "Open with").
     paths = [Path(a) for a in argv[1:] if not a.startswith("-")]
@@ -96,4 +124,14 @@ def run(argv: list[str] | None = None) -> int:
 
     code = app.exec()
     log.info("Exiting (%s); log: %s", code, log_file_path())
+    if state.runner.busy:
+        # A task that ignored cancellation would keep Qt's thread pool (and a
+        # windowless process) alive. Project data and PDFs are written
+        # atomically; at worst an interrupted image export leaves an
+        # incomplete file in the export folder (the user chose "Stop and quit").
+        import logging
+
+        log.warning("Background work still running at exit; ending the process.")
+        logging.shutdown()
+        os._exit(code)
     return code
