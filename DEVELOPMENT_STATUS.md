@@ -353,7 +353,19 @@ Latest results: see "Last test runs" at the end of this file.
 | `ab2e868` | Optional AI providers + mock-server tests |
 | _this commit_ | Windows setup/launcher/test scripts, documentation, status file |
 
-### Last test runs (2026-10-12, Linux, Python 3.14.6)
+### Last test runs (2026-10-13, Linux, Python 3.14.6)
+
+* After quality phase 1 (2.4): full suite **239 passed, 2 skipped** in
+  16 min 17 s (skips: the live Ollama tests). New: `tests/test_quality.py`
+  (25), `tests/test_realworld_kit.py` (4), a pagination regression test.
+* A subset run found a real, input-dependent Canva pagination bug: a caption
+  starting 0.17 px above a page cut was cut (tolerance 0.5 px). Fixed in
+  `canva/pages.py` with a regression test
+  (`test_a_cut_never_runs_through_text_starting_just_above_it`).
+* Known, pre-existing: when `test_ui.py` and `test_canva.py` run in the same
+  pytest process, the process crashes **after** all tests have passed and
+  reported (exit 135/139, Qt WebEngine shutdown). Reproduced on the previous
+  commit `db0eb53` too; the application itself is not affected.
 
 * After Export to Canva (2.3): full suite **211 passed, 2 skipped** in 8 min 41 s
   (the skips are the live Ollama tests). `tests/test_canva.py`: 13 passed,

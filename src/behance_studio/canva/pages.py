@@ -56,13 +56,14 @@ def _plan(scene: Scene, height: int, blockers: list[tuple[float, float]], images
     while T - y > height + 0.5:
         cut = y + height
         while True:
-            crossing = [top for top, bottom in blockers if top < cut - 0.5 and bottom > cut + 0.5]
+            # an element starting even a fraction of a pixel above the cut would be cut (or shown on two pages)
+            crossing = [top for top, bottom in blockers if top < cut - 0.01 and bottom > cut + 0.5]
             if not crossing or any(top <= y + 1.0 for top in crossing):
                 break  # nothing in the way, or an element taller than the page
             cut = min(crossing)  # just above the element
         if cut - y < height * 0.4:  # would leave most of the page empty: cut through instead
             cut = y + height
-        forced += sum(1 for top, bottom in blockers if top < cut - 0.5 and bottom > cut + 0.5)
+        forced += sum(1 for top, bottom in blockers if top < cut - 0.01 and bottom > cut + 0.5)
         fillers += (y + height) - cut
         ranges.append((y, cut))
         y = cut

@@ -361,6 +361,17 @@ def test_pptx_rendered_by_libreoffice_matches_the_original(generated, tmp_path):
             assert result.powerpoint_similarity >= office, (record.family, [round(d.similarity, 3) for d in result.powerpoint])
 
 
+def test_a_cut_never_runs_through_text_starting_just_above_it():
+    """Regression: a caption starting 0.17 px above a page cut was cut (tolerance was 0.5 px)."""
+    from behance_studio.canva.model import Element, Scene, Solid
+
+    els = [Element("rect", 0, 0, 1400, 5000, fill=Solid("#FFFFFF"), role="background"),
+           Element("text", 100, 2189.83, 400, 15.22, name="caption", role="text")]
+    paged = paginate(Scene(1400, 5000.0, "t", els, [], {}, []), 2190)
+    placed = [(p.index, e) for p in paged.pages for e in p.elements if e.name == "caption"]
+    assert len(placed) == 1 and placed[0][1].y >= 0 and placed[0][1].y + placed[0][1].h <= paged.page_height
+
+
 def test_compare_metric_detects_real_differences():
     a = Image.new("RGB", (400, 300), "#F3EEE6")
     b = a.copy()
