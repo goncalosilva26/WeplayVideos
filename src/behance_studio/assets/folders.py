@@ -129,6 +129,42 @@ def folder_parts(asset) -> list[str]:
     return [p for p in path.split("/") if p.strip() and p not in (".", "..")]
 
 
+def backfill_source_folders(assets) -> list:
+    """Recover the folder path of assets imported without it.
+
+    Projects imported before folder paths were recorded, and section folders
+    dropped one by one, have no ``source_folder``; their original file path
+    (``source_path``) still shows how the designer organised them. The path
+    is taken relative to the parent of the common folder of all assets, the
+    same convention the importer uses. Returns the assets that changed."""
+    from pathlib import PurePosixPath, PureWindowsPath
+
+    def parts(p: str):
+        return (PureWindowsPath(p) if ("\\" in p or re.match(r"^[A-Za-z]:", p)) else PurePosixPath(p)).parts
+
+    known = [a for a in assets if getattr(a, "source_path", "")]
+    missing = [a for a in known if not getattr(a, "source_folder", "")]
+    if not missing:
+        return []
+    dirs = [parts(a.source_path)[:-1] for a in known]
+    common = list(dirs[0])
+    for d in dirs[1:]:
+        n = 0
+        while n < len(common) and n < len(d) and common[n].lower() == d[n].lower():
+            n += 1
+        common = common[:n]
+    if len({tuple(d) for d in dirs}) < 2 or not common:
+        return []  # every file in one folder: nothing to recover
+    base = len(common) - 1  # keep the common folder's own name (like a dropped folder)
+    changed = []
+    for a in missing:
+        rel = parts(a.source_path)[base:-1]
+        if rel:
+            a.source_folder = "/".join(rel)
+            changed.append(a)
+    return changed
+
+
 def section_type_of_path(folder: str) -> str | None:
     """Section type named by a folder path (deepest specific folder wins)."""
     parts = [p for p in (folder or "").replace("\\", "/").split("/") if p.strip()]
@@ -195,6 +231,11 @@ def _common_prefix(paths: list[list[str]]) -> list[str]:
     return prefix
 
 
+def is_numbered(name: str) -> bool:
+    """'01 Logo', '1. Cores', 'A) Packaging': the designer numbered it as a section."""
+    return bool(re.match(r"^\s*(\d{1,3}(?!\d)\s*[-.)_]?|[A-Za-z]\s*[-.)_])\s*\S", name or "")) and not re.match(r"^\s*\d+\S*$", name or "")
+
+
 def _pick_level(rel: list[str]) -> tuple[int, str] | None:
     """Index of the folder that names the section, and its chapter."""
     chapter = ""
@@ -205,7 +246,11 @@ def _pick_level(rel: list[str]) -> tuple[int, str] | None:
             i += 1
             continue
         deeper = any(is_specific(c) for c in rel[i + 1:])
-        if deeper and (is_broad(comp) or not is_specific(comp)):
+        # A numbered folder is a section the designer defined ("1. Logos/Versões"):
+        # its sub-folders are groups inside it, unless it is a broad chapter
+        # ("02 Brand Identity/Logo") that groups several sections.
+        numbered = is_numbered(comp) and not is_broad(comp)
+        if deeper and not numbered and (is_broad(comp) or not is_specific(comp)):
             chapter = clean_name(comp)
             i += 1
             continue

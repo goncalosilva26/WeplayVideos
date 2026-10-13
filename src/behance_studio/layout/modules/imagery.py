@@ -187,11 +187,13 @@ def stage(k: Kit, sp: SectionPlan, p: dict) -> Section:
     bg = p.get("bg") or k.stage_bg(own)
     sb = k.section(sp, bg, "stage")
     vpad = k.px(ad.vpad * 0.8)
-    box_w = W * (0.62 if a.aspect < 1.2 else 0.78)
+    align = p.get("align", "center")  # left / right: asymmetric placement (rhythm)
+    box_w = W * (0.62 if a.aspect < 1.2 else 0.78) * (0.88 if align != "center" else 1.0)
     box_h = k.px(860 if a.aspect < 1.2 else 700)
     shadow = ad.shadow
     shadow_color = C.mix(ad.dark, bg, 0.15) if shadow == "hard" else None
-    b = k.natural(aid, (W - box_w) / 2, vpad, box_w, box_h, ay=0.0, shadow=shadow, shadow_color=shadow_color, radius=k.px(ad.radius) if ad.radius else 0)
+    b = k.natural(aid, _aligned_x(k, W, box_w, align), vpad, box_w, box_h, ay=0.0, ax=_anchor(align), shadow=shadow, shadow_color=shadow_color,
+                  radius=k.px(ad.radius) if ad.radius else 0)
     sb.add(b)
     return sb.finish(vpad + (k.px(24) if shadow == "hard" else 0))
 
@@ -229,9 +231,24 @@ def doc_stage(k: Kit, sp: SectionPlan, p: dict) -> Section:
     bg = p.get("bg") or k.stage_bg((k.asset(aid).analysis or {}).get("background"))
     sb = k.section(sp, bg, "doc_stage")
     vpad = k.px(ad.vpad * 0.8)
-    box_w = W * 0.74
-    sb.add(k.natural(aid, (W - box_w) / 2, vpad, box_w, k.px(980), ay=0.0, shadow="soft" if not C.is_dark(bg) else "lifted"))
+    align = p.get("align", "center")
+    box_w = W * (0.74 if align == "center" else 0.64)
+    sb.add(k.natural(aid, _aligned_x(k, W, box_w, align), vpad, box_w, k.px(980), ay=0.0, ax=_anchor(align),
+                     shadow="soft" if not C.is_dark(bg) else "lifted"))
     return sb.finish(vpad)
+
+
+def _aligned_x(k: Kit, W: float, box_w: float, align: str) -> float:
+    margin = k.px(max(96, k.ad.margin))
+    if align == "left":
+        return margin
+    if align == "right":
+        return W - margin - box_w
+    return (W - box_w) / 2
+
+
+def _anchor(align: str) -> float:
+    return {"left": 0.0, "right": 1.0}.get(align, 0.5)
 
 
 @module("pattern_field")

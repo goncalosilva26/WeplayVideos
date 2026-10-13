@@ -66,6 +66,16 @@ by the offline analysis or by local AI — only changes *how* it is shown,
 never *which section* it is in. Images outside the section folders are
 placed by what they show.
 
+Folder names are recognised in Portuguese and English, singular or plural
+(`Logos`, `Logotipos`, `Cores`, `Tipografia`, `Padrão`, `Ícones`,
+`Embalagens`, `Rótulos`, `Cartões de visita`, `Estacionário`,
+`Merchandising`, `Brochura`, `Ementa`, `Manual de marca`, `Cartazes`,
+`Outdoors`, `Redes Sociais`, `Fotografia`, `Vídeos`…); any other name becomes
+a section with that title. A numbered folder (`1. Logos`, `02 Embalagens`)
+is always one section and keeps its sub-folders (`1. Logos/Versões`) inside
+it. Projects created before this, or files dropped one by one, get their
+folders back from the files' original locations at the next generation.
+
 The **Sections** choice in the project's side panel switches between
 *Follow my folders* (default) and *Let AI organise by content*, which
 ignores the folders and groups images by their recognised type.

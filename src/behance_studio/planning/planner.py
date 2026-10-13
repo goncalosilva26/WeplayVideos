@@ -321,7 +321,14 @@ def _best_logo(assets: Iterable[AssetRecord]) -> AssetRecord | None:
 
 def hero_candidates(assets: list[AssetRecord]) -> list[AssetRecord]:
     pool = [a for a in assets if a.effective_kind in HERO_KINDS and (a.roles or {}).get("hero", 0) > 0.3]
-    return sorted(pool, key=lambda a: -((a.roles or {}).get("hero", 0) + (0.1 if a.aspect >= 1.2 else 0)))
+    from behance_studio.ai.vision import cover_score
+
+    def rank(a: AssetRecord) -> float:
+        judged = cover_score(a)  # the vision model's judgement, when it looked at the image
+        base = (a.roles or {}).get("hero", 0) + (0.1 if a.aspect >= 1.2 else 0)
+        return base if judged is None else 0.6 * base + 0.4 * judged
+
+    return sorted(pool, key=lambda a: (-rank(a), a.filename.lower()))
 
 
 def _captions(ctx: PlanningContext, assets: list[AssetRecord], writer: Copywriter) -> dict[str, str]:
@@ -392,8 +399,11 @@ def plan_from_script(ctx: PlanningContext, prefs: PlanPreferences, seed: int) ->
     unused = [aid for aid in usable if aid not in used]
     if not script.strict and unused:
         # AUTO_SECTIONS: yes → place remaining material before the closing.
-        extra_ctx = PlanningContext(ctx.project_name, [usable[a] for a in unused], ctx.directives, ctx.direction)
-        auto = _auto_sections(extra_ctx, prefs, random.Random(seed), writer, exclude_types={s.type for s in sections})
+        extra_ctx = PlanningContext(ctx.project_name, [usable[a] for a in unused], ctx.directives, ctx.direction, sections=ctx.sections)
+        if extra_ctx.by_folders:  # material the script does not mention keeps its folder sections
+            auto = _folder_sections(extra_ctx, prefs, writer)
+        else:
+            auto = _auto_sections(extra_ctx, prefs, random.Random(seed), writer, exclude_types={s.type for s in sections})
         insert_at = next((i for i, s in enumerate(sections) if s.type == "closing"), len(sections))
         sections[insert_at:insert_at] = auto
         used.update(a for s in auto for a in s.asset_ids)

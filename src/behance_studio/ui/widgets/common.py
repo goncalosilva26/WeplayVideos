@@ -254,6 +254,7 @@ class Thumb(QWidget):
 
     def _loaded(self, pix: QPixmap) -> None:
         self._pix = pix
+        self._backdrop = _transparent_backdrop(pix)
         self.update()
 
     def set_overlay(self, text: str) -> None:
@@ -270,7 +271,11 @@ class Thumb(QWidget):
         p.fillRect(self.rect(), self._placeholder)
         if self._pix is not None and not self._pix.isNull():
             pw, ph = self._pix.width(), self._pix.height()
-            if self._mode == "cover":
+            backdrop = getattr(self, "_backdrop", None)
+            if backdrop is not None:  # transparent artwork (logos): whole, on a contrasting ground
+                p.fillRect(self.rect(), backdrop)
+                scale = min(self.width() / pw, self.height() / ph) * 0.82
+            elif self._mode == "cover":
                 scale = max(self.width() / pw, self.height() / ph)
             else:
                 scale = min(self.width() / pw, self.height() / ph)
@@ -287,6 +292,27 @@ class Thumb(QWidget):
         p.end()
 
 
+def _transparent_backdrop(pix: QPixmap) -> QColor | None:
+    """A ground that contrasts with a transparent image's own ink, or None
+    when the image has no transparent area."""
+    if pix is None or pix.isNull() or not pix.hasAlphaChannel():
+        return None
+    img = pix.toImage().scaled(48, 48)
+    total = lum = 0.0
+    clear = 0
+    for y in range(img.height()):
+        for x in range(img.width()):
+            c = img.pixelColor(x, y)
+            a = c.alphaF()
+            if a < 0.05:
+                clear += 1
+            total += a
+            lum += a * (0.2126 * c.redF() + 0.7152 * c.greenF() + 0.0722 * c.blueF())
+    if clear < img.width() * img.height() * 0.05 or total <= 0:
+        return None  # practically opaque
+    return QColor("#ECE9E3") if lum / total < 0.6 else QColor("#2B2A28")
+
+
 class StripPreview(QWidget):
     """Shows the top of a full-length presentation strip; scrolls through the
     whole presentation while hovered, so differences are visible at a glance."""
@@ -297,6 +323,7 @@ class StripPreview(QWidget):
         self._pix: QPixmap | None = None
         self._offset = 0.0
         self._radius = radius
+        self.placeholder = ""  # shown while there is no image (e.g. "Preparing preview…")
         self._anim = QVariantAnimation(self)
         self._anim.valueChanged.connect(self._set_offset)
         self.setMouseTracking(True)
@@ -353,6 +380,9 @@ class StripPreview(QWidget):
             scale = self.width() / self._pix.width()
             src = QRectF(0, self._offset / scale, self._pix.width(), self.height() / scale)
             p.drawPixmap(QRectF(self.rect()), self._pix, src)
+        elif self.placeholder:
+            p.setPen(QColor(T.text2))
+            p.drawText(self.rect(), int(Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap), self.placeholder)
         p.end()
 
 

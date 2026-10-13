@@ -87,10 +87,11 @@ class AssetDelegate(QStyledItemDelegate):
         pix: QPixmap | None = self.view.pixmaps.get(aid)
         if pix is not None and not pix.isNull():
             p.setClipPath(path)
-            scale = min(img_rect.width() / pix.width(), img_rect.height() / pix.height())
+            # transparent artwork (logos) on a ground that contrasts with its ink, with a margin
+            backdrop = self.view.backdrops.get(aid)
+            scale = min(img_rect.width() / pix.width(), img_rect.height() / pix.height()) * (0.8 if backdrop is not None else 1.0)
             w, h = pix.width() * scale, pix.height() * scale
-            # checkerboard behind transparent artwork
-            p.fillRect(img_rect, QColor("#2A2E34"))
+            p.fillRect(img_rect, backdrop if backdrop is not None else QColor("#2A2E34"))
             p.drawPixmap(QRectF(img_rect.center().x() - w / 2, img_rect.center().y() - h / 2, w, h), pix, QRectF(pix.rect()))
             p.setClipping(False)
         status = index.data(ROLE_STATUS)
@@ -130,6 +131,7 @@ class AssetGrid(QListWidget):
     def __init__(self) -> None:
         super().__init__()
         self.pixmaps: dict[str, QPixmap] = {}
+        self.backdrops: dict[str, QColor | None] = {}
         self.setViewMode(QListWidget.ViewMode.IconMode)
         self.setResizeMode(QListWidget.ResizeMode.Adjust)
         self.setMovement(QListWidget.Movement.Static)
@@ -322,7 +324,8 @@ class WorkspacePage(QWidget):
             self.grid.clear()
             return
         self.header.title.setText(project.name)
-        self.header.set_subtitle(str(project.root))
+        self.header.set_subtitle(_short_path(project.root))
+        self.header.subtitle.setToolTip(str(project.root))
         self.section_source.blockSignals(True)
         self.section_source.setCurrentIndex(max(0, self.section_source.findData("content" if project.config.section_source == "content" else "auto")))
         self.section_source.blockSignals(False)
@@ -362,10 +365,30 @@ class WorkspacePage(QWidget):
             thumb = thumbnail_path(project, asset)
             if thumb and asset.id not in self.grid.pixmaps:
                 image_loader().load(thumb, QSize(360, 360), lambda pix, aid=asset.id: self._thumb_loaded(aid, pix))
+        self._retry_missing_thumbnails(assets)
 
     def _thumb_loaded(self, aid: str, pix: QPixmap) -> None:
+        from behance_studio.ui.widgets.common import _transparent_backdrop
+
         self.grid.pixmaps[aid] = pix
+        self.grid.backdrops[aid] = _transparent_backdrop(pix)
         self.grid.viewport().update()
+
+    def _retry_missing_thumbnails(self, assets) -> None:
+        """Images whose analysis failed earlier (no thumbnail, type 'Other') are
+        analysed again once in the background."""
+        project = self.state.project
+        tried = self.__dict__.setdefault("_thumb_retry", set())
+        todo = [a for a in assets if a.is_visual and a.status == "ok" and a.id not in tried and thumbnail_path(project, a) is None]
+        if not todo or project is None:
+            return
+        tried.update(a.id for a in todo)
+        from behance_studio.assets.importer import analyze_assets
+
+        def work(token, progress):
+            return analyze_assets(project, todo, token=token, force=True)
+
+        self.state.runner.start(work, "re-analyse", on_done=lambda _r: (self.state.project is project) and self.state.assets_changed.emit())
 
     def _load_texts(self) -> None:
         project = self.state.project
@@ -441,9 +464,14 @@ class WorkspacePage(QWidget):
         else:
             ai_text = f"AI provider: {provider}. " + ("This project allows AI assistance." if project.config.ai_consent else "Nothing from this project is sent until you allow it in Settings.")
         lay.addWidget(label(ai_text, "Faint", wrap=True))
+        from behance_studio.assets.folders import backfill_source_folders, folder_parts
         from behance_studio.planning.assignment import assign_sections
 
+        backfill_source_folders([a for a in assets if a.is_visual])  # shown as generation will use it
         organisation = assign_sections(assets, project.config.section_source, d.language)
+        if not organisation.by_folders and project.config.section_source != "content" and not any(folder_parts(a) for a in assets if a.is_visual):
+            lay.addWidget(label("Tip: these images were added without their folders. To keep the sections you organised "
+                                "(e.g. 01 Logo, 02 Packaging), import the whole project folder.", "Faint", wrap=True))
         if organisation.by_folders:
             names = [s.title for s in organisation.folder_map.sections]
             lay.addWidget(label("Sections from your folders: " + " › ".join(names[:12]) + (" …" if len(names) > 12 else ""), "Muted", wrap=True))
@@ -614,3 +642,11 @@ class WorkspacePage(QWidget):
             return
         self.state.project.remove_assets(ids)
         self.state.assets_changed.emit()
+
+
+def _short_path(path, keep: int = 3) -> str:
+    """The last folders of a long path ("…/Projects/Client/Project"); the full path is in the tooltip."""
+    from pathlib import Path
+
+    parts = Path(path).parts
+    return str(path) if len(parts) <= keep + 1 else "…/" + "/".join(parts[-keep:])

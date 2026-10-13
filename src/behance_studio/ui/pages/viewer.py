@@ -516,10 +516,26 @@ class ViewerPage(QWidget):
         overrides = self.proposal.spec.overrides
         hidden = {pid for pid, o in overrides.items() if o.get("hidden")}
         n = 0
-        for sp in self.proposal.plan.sections:
+        sections = self.proposal.plan.sections
+        titles = [overrides.get(sp.id, {}).get("title") or sp.title or section_type(sp.type).title("en") for sp in sections]
+        # A section that continues over several parts is listed once, with its parts below it.
+        runs: list[int] = []
+        for i, title in enumerate(titles):
+            runs.append(runs[-1] + 1 if i and title == titles[i - 1] else 1)
+        totals = list(runs)
+        for i in range(len(runs) - 2, -1, -1):
+            if runs[i + 1] > 1:
+                totals[i] = totals[i + 1]
+        for i, sp in enumerate(sections):
             prefix = "◌ " if sp.id in hidden else ""
-            title = overrides.get(sp.id, {}).get("title") or sp.title or section_type(sp.type).title("en")
-            item = QListWidgetItem(f"{prefix}{title}")
+            title = titles[i]
+            if runs[i] > 1:
+                text = f"      ↳ part {runs[i]}"
+            elif totals[i] > 1:
+                text = f"{title}  ·  {totals[i]} parts"
+            else:
+                text = title
+            item = QListWidgetItem(f"{prefix}{text}")
             item.setData(Qt.ItemDataRole.UserRole, sp.id)
             item.setToolTip(f"{section_type(sp.type).title('en')}{' · from script' if sp.locked else ''}{' · hidden' if sp.id in hidden else ''}")
             if sp.locked:

@@ -61,6 +61,13 @@ def compare(a: Image.Image, b: Image.Image, page: int = 0) -> PageDiff:
 # ---------------------------------------------------------------- reference
 def reference_pages(project, presentation, paged: PagedScene, browser, tmp: Path, section_ids: list[str] | None = None) -> list[Image.Image]:
     """The original presentation (Chromium) cut into the export's pages."""
+    ranges = [(p.y0, p.y1, _filler_color(p)) for p in paged.pages]
+    return reference_ranges(project, presentation, paged.scene.width, paged.page_height, ranges, browser, tmp, section_ids)
+
+
+def reference_ranges(project, presentation, width: int, page_height: int, ranges: list[tuple[float, float, str]], browser, tmp: Path,
+                     section_ids: list[str] | None = None) -> list[Image.Image]:
+    """The original presentation cut at the given (y0, y1, filler colour) page ranges."""
     from behance_studio.render.browser import BrowserSession
     from behance_studio.render.project_render import write_html
 
@@ -68,11 +75,11 @@ def reference_pages(project, presentation, paged: PagedScene, browser, tmp: Path
     page = browser.open(html_path, presentation.width, scale=1.0)
     out = []
     try:
-        for p in paged.pages:
-            shot = tmp / f"ref-{p.index}.png"
-            BrowserSession.capture(page, p.y0, p.y1 - p.y0, presentation.width, 1.0, shot)
+        for i, (y0, y1, filler) in enumerate(ranges):
+            shot = tmp / f"ref-{i}.png"
+            BrowserSession.capture(page, y0, y1 - y0, presentation.width, 1.0, shot)
             with Image.open(shot) as img:
-                canvas = Image.new("RGB", (paged.scene.width, paged.page_height), _filler_color(p))
+                canvas = Image.new("RGB", (int(width), int(page_height)), filler)
                 canvas.paste(img.convert("RGB"), (0, 0))
             out.append(canvas)
     finally:

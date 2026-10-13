@@ -128,4 +128,12 @@ def strength(asset: AssetRecord) -> float:
     a = asset.analysis or {}
     if asset_nature(asset) == "photo" and a.get("edge_density", 1.0) < 0.005 and a.get("colorfulness", 100) < 30:
         score *= 0.72
+    # The vision model judged the image as a case-study opener (composition,
+    # appeal, brand presence): it weighs in on which images lead and which are
+    # held back, alongside the measured quality.
+    from behance_studio.ai.vision import cover_score
+
+    judged = cover_score(asset)
+    if judged is not None:
+        score = 0.6 * score + 0.4 * judged
     return round(score, 4)

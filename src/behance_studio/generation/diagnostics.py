@@ -60,9 +60,27 @@ def _asset_record(asset, assignment) -> dict[str, Any]:
                                       "rejected", "from_cache", "last_attempt") if k in ai} or {"decision": "not run"},
         "final_type": asset.effective_kind,
         "type_source": source,
+        "ai_influence": ai_influence(asset),
         "intended_section": placement.to_dict() if placement else None,
         "placements": [],
     }
+
+
+def ai_influence(asset) -> list[str]:
+    """What the vision model's answer changes in the layouts for this image."""
+    from behance_studio.ai.vision import cover_score, nature_from_ai, subject_box
+    from behance_studio.assets.understanding import AMBIGUOUS_KINDS
+
+    out = []
+    if asset.kind_source == "ai" and not asset.user_kind:
+        out.append("type")
+    if asset.effective_kind in AMBIGUOUS_KINDS and nature_from_ai(asset):
+        out.append("presentation (crop or stage)")
+    if subject_box(asset):
+        out.append("crop focus")
+    if cover_score(asset) is not None:
+        out.append("ranking (cover / lead images)")
+    return out
 
 
 def build_report(project, assets, assignment, proposals, ai_note: str = "") -> dict[str, Any]:
@@ -89,7 +107,9 @@ def build_report(project, assets, assignment, proposals, ai_note: str = "") -> d
         violations = [{"file": records[a]["file"] if a in records else a, "shown_in": shown, "belongs_to": wanted}
                       for a, shown, wanted in placement_violations(plan, plan.asset_sections or {})]
         not_rendered = sorted({records[a]["file"] for s in plan.sections for a in s.asset_ids if a in records and a not in rendered})
-        runs.append({"proposal": name, "family": family_info(proposal.spec.family).name,
+        cover = next((s.asset_ids[0] for s in plan.sections if s.type == "cover" and s.asset_ids), None)
+        runs.append({"cover": records[cover]["file"] if cover in records else None,
+                     "proposal": name, "family": family_info(proposal.spec.family).name,
                      "director": proposal.sources.get("director", ""), "sections": sections,
                      "violations": violations, "planned_but_not_rendered": not_rendered})
     return {
@@ -118,6 +138,14 @@ def render_text(report: dict[str, Any]) -> str:
         f"AI: {report['ai'] or 'not used'}",
     ]
     lines += [f"Note: {n}" for n in report.get("notes", [])]
+    influence: dict[str, int] = {}
+    for r in report["assets"]:
+        for k in r.get("ai_influence", []):
+            influence[k] = influence.get(k, 0) + 1
+    if influence:
+        lines.append("AI influence on the layouts: " + ", ".join(f"{k} for {v} image(s)" for k, v in influence.items()))
+    elif report.get("ai") and report["ai"] != "not used":
+        lines.append("AI influence on the layouts: none (no answer was confident and consistent enough to use)")
     if report.get("folder_sections"):
         lines.append("Folder sections: " + " › ".join(s["title"] for s in report["folder_sections"]))
     lines += ["", f"{'FILE':<44} {'FOLDER SECTION':<16} {'MEASURED':<12} {'AI RESULT':<26} {'FINAL TYPE (DECIDED BY)':<34} INTENDED SECTION"]
@@ -138,11 +166,12 @@ def render_text(report: dict[str, Any]) -> str:
         decision = r["ai"].get("decision")
         reasons = (r["intended_section"] or {}).get("reasons", [])
         retry = f" (latest attempt {r['ai']['last_attempt']})" if r["ai"].get("last_attempt") else ""
-        lines.append(f"  {r['file']}: AI {decision or 'not run'}{retry}; section: {'; '.join(reasons) or '—'}")
+        used = f"; AI used for: {', '.join(r['ai_influence'])}" if r.get("ai_influence") else ""
+        lines.append(f"  {r['file']}: AI {decision or 'not run'}{retry}{used}; section: {'; '.join(reasons) or '—'}")
     lines += ["", "Layout placement:"]
     for run in report["proposals"]:
         ok = not run["violations"] and not run["planned_but_not_rendered"]
-        lines.append(f"  {run['proposal']} ({run['family']}, director: {run['director'] or '—'}) — "
+        lines.append(f"  {run['proposal']} ({run['family']}, director: {run['director'] or '—'}, cover: {run.get('cover') or 'logo'}) — "
                      + ("all images in their intended sections" if ok else
                         f"{len(run['violations'])} misplaced, {len(run['planned_but_not_rendered'])} not rendered"))
         for sec in run["sections"]:

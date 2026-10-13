@@ -543,7 +543,9 @@ def _folder_hero(b: "_Builder", groups) -> AssetRecord | None:
         return [a for a in out if a.aspect >= 1.2 and can_cover(a, 1.6)]
 
     candidates = pool({"photography"}) or pool(None)
-    candidates.sort(key=lambda a: -((a.roles or {}).get("hero", 0) * 0.6 + (a.analysis or {}).get("sharpness", 0) / 4000))
+    from behance_studio.assets.understanding import strength
+
+    candidates.sort(key=lambda a: (-(strength(a) + 0.25 * (a.roles or {}).get("hero", 0)), a.filename.lower()))
     if not candidates:
         return None
     rank = {"photo": 0, "story": 1}.get(b.concept, b.rng.randrange(2))  # concepts open on different images

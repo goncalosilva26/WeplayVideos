@@ -22,7 +22,7 @@ from typing import Any
 
 from behance_studio.projects.models import ASSET_KINDS
 
-PROMPT_VERSION = 3
+PROMPT_VERSION = 4  # 4: subject box and cover score (used by cropping and image ranking)
 
 # Kinds the model may choose ("reference" is only set by the user or folder).
 AI_KINDS = {k: v for k, v in ASSET_KINDS.items() if k != "reference"}
@@ -84,8 +84,10 @@ SCHEMA: dict[str, Any] = {
         "confidence": {"type": "number"},
         "description": {"type": "string"},
         "tags": {"type": "array", "items": {"type": "string"}},
+        "subject_box": {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4},
+        "cover_score": {"type": "number"},
     },
-    "required": ["kind", "presentation", "shows_logo", "text_visible", "confidence", "description", "tags"],
+    "required": ["kind", "presentation", "shows_logo", "text_visible", "confidence", "description", "tags", "subject_box", "cover_score"],
     "additionalProperties": False,
 }
 
@@ -101,7 +103,11 @@ def prompt(filename: str, folder: str, include_names: bool = True) -> str:
         f"Presentation:\n{shows}\n"
         'Return {"kind": "<one allowed kind>", "presentation": "<one presentation>", "shows_logo": true|false, '
         '"text_visible": true|false, "confidence": <0..1>, "description": "<max 12 words, what is visible>", '
-        '"tags": ["<up to 5 lowercase words>"]}'
+        '"tags": ["<up to 5 lowercase words>"], "subject_box": [x0, y0, x1, y1], "cover_score": <0..1>}\n'
+        "subject_box: the smallest box around what must stay visible when the image is cropped (the main subject, "
+        "including any logo or text on it), in 0-1000 coordinates of the image (0,0 = top left).\n"
+        "cover_score: how well this image would work as the opening image of a professional Behance case study "
+        "(striking, sharp, well composed, shows the brand); 0 = unusable, 1 = excellent."
     )
 
 
@@ -130,7 +136,34 @@ def normalise(data: dict[str, Any]) -> dict[str, Any] | None:
         "confidence": round(confidence, 3),
         "description": _clean(str(data.get("description", "")))[:120],
         "tags": [_clean(str(t)).lower()[:24] for t in (data.get("tags") or [])[:5] if str(t).strip()],
+        "subject_box": _box(data.get("subject_box")),
+        "cover_score": _unit(data.get("cover_score")),
     }
+
+
+def _box(value: Any) -> list[float] | None:
+    """A subject box as fractions (x0, y0, x1, y1); accepts 0-1000 or 0-1 scales."""
+    if not isinstance(value, (list, tuple)) or len(value) != 4:
+        return None
+    try:
+        v = [float(x) for x in value]
+    except (TypeError, ValueError):
+        return None
+    scale = 1000.0 if max(v) > 1.5 else 1.0
+    x0, y0, x1, y1 = (max(0.0, min(1.0, x / scale)) for x in v)
+    if x1 - x0 < 0.02 or y1 - y0 < 0.02:
+        return None  # empty or inverted: not usable
+    return [round(x0, 4), round(y0, 4), round(x1, 4), round(y1, 4)]
+
+
+def _unit(value: Any) -> float | None:
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    if 1.0 < v <= 100.0:
+        v /= 100.0
+    return round(max(0.0, min(1.0, v)), 3)
 
 
 PHOTO_KINDS = {"photo", "product", "lifestyle", "portrait"}
@@ -162,11 +195,39 @@ def implausible(result: dict[str, Any], asset) -> str:
     return ""
 
 
-def nature_from_ai(asset) -> str | None:
-    """The presentation the model saw, as an asset nature (None when unknown)."""
+def accepted(asset, min_confidence: float = 0.5) -> dict[str, Any] | None:
+    """The model's answer about this very image when it may guide layout
+    (not rejected as implausible, confident enough); None otherwise."""
     ai = (asset.analysis or {}).get("ai") or {}
-    if ai.get("rejected") or float(ai.get("confidence", 0) or 0) < 0.6:
+    if not ai.get("kind") or ai.get("rejected") or float(ai.get("confidence", 0) or 0) < min_confidence:
         return None
-    if ai.get("kind") and ai.get("kind") != asset.effective_kind:
-        return None  # the user (or the heuristics) decided otherwise
+    if ai.get("sha256") and getattr(asset, "sha256", "") and ai["sha256"] != asset.sha256:
+        return None  # an answer about an earlier version of the file
+    return ai
+
+
+def nature_from_ai(asset) -> str | None:
+    """The presentation the model saw, as an asset nature (None when unknown).
+
+    Also used when the model's *type* was not applied because the image's
+    section folder decides: how an image is presented (flat artwork or a
+    photographed scene) does not depend on its section."""
+    ai = accepted(asset, 0.6)
+    if ai is None:
+        return None
+    if asset.user_kind and ai.get("kind") != asset.user_kind:
+        return None  # the user decided otherwise
     return PRESENTATION_NATURE.get(ai.get("presentation") or "")
+
+
+def subject_box(asset) -> list[float] | None:
+    """What must stay visible when cropping (fractions), from the model."""
+    ai = accepted(asset)
+    return ai.get("subject_box") if ai else None
+
+
+def cover_score(asset) -> float | None:
+    """The model's judgement of the image as a case-study opener (0..1)."""
+    ai = accepted(asset)
+    value = ai.get("cover_score") if ai else None
+    return float(value) if value is not None else None

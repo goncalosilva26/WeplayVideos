@@ -27,7 +27,7 @@ from behance_studio.core.settings import get_settings_store
 from behance_studio.core.tasks import ProgressEvent
 
 COMMANDS = {"create", "import", "generate", "list", "export", "trash", "restore", "purge", "demo", "doctor", "ai-check", "diagnose",
-            "canva-export", "canva-connect", "canva-status", "canva-disconnect"}
+            "canva-export", "canva-connect", "canva-status", "canva-disconnect", "canva-verify", "real-test"}
 
 
 def _progress(event: ProgressEvent) -> None:
@@ -277,6 +277,33 @@ def cmd_canva_disconnect(args) -> int:
     return 0
 
 
+def cmd_canva_verify(args) -> int:
+    """Compare the pages Canva renders (downloaded from canva.com) with the original."""
+    from behance_studio.canva.verify import verify_canva
+
+    settings = get_settings_store().settings
+    result = verify_canva(Path(args.design), Path(args.canva_pages), Path(args.out) if args.out else None,
+                          Path(args.project) if args.project else None, settings.browser_path, progress=lambda m: print(f"  … {m}"))
+    print(result.report.read_text(encoding="utf-8"))
+    print(f"Results: {result.out_dir}")
+    return 0 if result.ok else 2
+
+
+def cmd_real_test(args) -> int:
+    """Test with a real project on this computer: import, generate, export, measure, report."""
+    from behance_studio.realtest import default_output_dir, run_real_test
+
+    families = [f.strip() for f in args.families.split(",")] if args.families else None
+    out = Path(args.out) if args.out else default_output_dir()
+    result = run_real_test(Path(args.folder), out, use_ai=not args.no_ai, canva=not args.no_canva, families=families,
+                           progress=lambda m: print(f"  {m}", flush=True))
+    print()
+    print(result.report.read_text(encoding="utf-8"))
+    print(f"Pasta do teste: {result.folder}")
+    print(f"Ficheiro para enviar: {result.zip_path}")
+    return 0 if result.ok else 2
+
+
 def cmd_trash(args) -> int:
     from behance_studio.projects.versions import VersionManager
 
@@ -368,7 +395,10 @@ def cmd_diagnose(args) -> int:
     from behance_studio.generation.diagnostics import build_report, render_text
     from behance_studio.planning.assignment import assign_sections
 
+    from behance_studio.assets.folders import backfill_source_folders
+
     assets = project.list_assets()
+    backfill_source_folders([a for a in assets if a.is_visual])  # as generation will do
     assignment = assign_sections(assets, project.config.section_source)
     print(render_text(build_report(project, assets, assignment, [], "(no generation yet: current assignment only)")))
     return 0
@@ -487,6 +517,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_canva_status)
     p = sub.add_parser("canva-disconnect")
     p.set_defaults(func=cmd_canva_disconnect)
+    p = sub.add_parser("canva-verify", help="compare the pages Canva shows (downloaded from canva.com as PNG/ZIP/PDF) with the original")
+    p.add_argument("design", help="the .pptx (or .canva.json) written by canva-export")
+    p.add_argument("canva_pages", help="what you downloaded from Canva: ZIP or folder of PNG pages, or a PDF")
+    p.add_argument("--project", help="the project folder, if it was moved since the export")
+    p.add_argument("--out", help="where to write the comparison (default: next to the download)")
+    p.set_defaults(func=cmd_canva_verify)
+    p = sub.add_parser("real-test", help="test with one of your projects: import, five proposals, PDF + Canva export, report and ZIP")
+    p.add_argument("folder", help="the project folder (with its section sub-folders)")
+    p.add_argument("--out", help="where to create the test (default: Documents/Behance Studio Tests)")
+    p.add_argument("--no-ai", action="store_true", help="do not use the local vision model even if Ollama is ready")
+    p.add_argument("--no-canva", action="store_true", help="skip the Canva export")
+    p.add_argument("--families", help="comma-separated concept families (default: the five concepts)")
+    p.set_defaults(func=cmd_real_test)
     for name in ("trash", "restore", "purge"):
         p = sub.add_parser(name)
         p.add_argument("project")

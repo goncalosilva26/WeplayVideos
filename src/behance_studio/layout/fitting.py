@@ -80,6 +80,29 @@ def _text_safe(asset: AssetRecord, visible: tuple[float, float, float, float]) -
     return True
 
 
+def _subject_safe(asset: AssetRecord, visible: tuple[float, float, float, float]) -> bool:
+    """True when the subject the vision model marked stays fully visible."""
+    from behance_studio.ai.vision import subject_box
+
+    box = subject_box(asset)
+    if not box:
+        return True
+    tol = 0.01
+    return box[0] >= visible[0] - tol and box[1] >= visible[1] - tol and box[2] <= visible[2] + tol and box[3] <= visible[3] + tol
+
+
+def focal_point(asset: AssetRecord) -> tuple[float, float]:
+    """Where crops are centred: the vision model's subject when it marked one,
+    otherwise the measured saliency centre."""
+    from behance_studio.ai.vision import subject_box
+
+    box = subject_box(asset)
+    if box:
+        return ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
+    raw = (asset.analysis or {}).get("focal_point") or [0.5, 0.5]
+    return (float(raw[0]), float(raw[1]))
+
+
 def max_crop(asset: AssetRecord) -> float:
     return MAX_CROP.get(asset.effective_kind, 0.08)
 
@@ -89,8 +112,7 @@ def choose_fit(asset: AssetRecord, frame_w: float, frame_h: float, prefer: str =
     image_aspect = asset.aspect
     frame_aspect = frame_w / frame_h if frame_h > 0 else 1.0
     crop = crop_fraction(image_aspect, frame_aspect)
-    focal_raw = (asset.analysis or {}).get("focal_point") or [0.5, 0.5]
-    focal = (float(focal_raw[0]), float(focal_raw[1]))
+    focal = focal_point(asset)
     if crop <= tolerance:
         # Practically identical proportions: cover hides at most a hairline.
         position, visible = cover_region(image_aspect, frame_aspect, (0.5, 0.5))
@@ -101,7 +123,7 @@ def choose_fit(asset: AssetRecord, frame_w: float, frame_h: float, prefer: str =
     top_anchor = kind in TOP_ANCHORED_CROP and image_aspect < frame_aspect
     limit = TOP_ANCHORED_CROP[kind] if top_anchor else max_crop(asset)
     position, visible = cover_region(image_aspect, frame_aspect, focal, top_anchor=top_anchor)
-    if _content_safe(asset, visible) or (crop <= limit and _text_safe(asset, visible)):
+    if _content_safe(asset, visible) or (crop <= limit and _text_safe(asset, visible) and _subject_safe(asset, visible)):
         return Fit("cover", position, crop, visible)
     return Fit("contain", (50.0, 50.0), 0.0, (0, 0, 1, 1))
 

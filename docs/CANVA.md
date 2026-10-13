@@ -143,9 +143,28 @@ Fraunces without its optical-size axis (wider letters).
 API are not reachable from the build environment and no Canva account was
 available. The upload protocol was tested against a local stand-in for the
 Canva API (`tests/canva_mock.py`) that checks PKCE, client authentication,
-token rotation, the import headers and the file, not Canva's converter.
-Please compare the first pages in Canva with the preview after your first
-export.
+token rotation, the import headers and the file, not Canva's converter —
+so those tests are **not** evidence of compatibility with Canva.
+
+### Verifying in your real Canva account
+
+`canva-verify` (or `Verificar_Canva.bat`) compares what Canva actually shows
+with the original, page by page, without any API:
+
+1. import the exported `.pptx` into canva.com (drag it onto the home page, or
+   *Create a design → Import file*);
+2. in Canva: *Share → Download → PNG → all pages* (a ZIP; a PDF also works
+   when Poppler's `pdftoppm` is installed);
+3. run `behance-studio canva-verify "<design>.pptx" "<download>.zip"`.
+
+The original pages are rebuilt from the project (the `.canva.json` next to
+the `.pptx` records the project folder, the proposals and where each page
+starts; use `--project` if the project was moved). The result folder next to
+the download has `Verificacao Canva.txt` — page count, page proportions and
+the share of each page that matches the original (≥ 95 % very close, 85–95 %
+small differences such as substituted fonts, < 85 % to check) — and a
+side-by-side image (original | Canva) of every page below 95 %.
+Step-by-step instructions in Portuguese: [TESTES_REAIS.md](TESTES_REAIS.md).
 
 ## Connecting your Canva account (optional)
 

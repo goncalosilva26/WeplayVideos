@@ -326,7 +326,12 @@ def export_to_canva(project, version_ids: list[str], options: CanvaOptions, clie
                 if size > CANVA_MAX_BYTES:
                     design.notes.append(f"The file is {size / 1e6:.0f} MB; Canva imports PowerPoint files up to 50 MB. "
                                         "Export with 'Standard' picture quality.")
-                atomic_write_json(design.scene_json, paged.to_dict())
+                data = paged.to_dict()
+                # where the pages come from, so that `canva-verify` can rebuild the original pages and compare
+                # them with the pages Canva itself renders (downloaded from canva.com)
+                data["source"] = {"project_root": str(project.root), "project_id": project.config.id, "section_ids": options.section_ids,
+                                  "parts": _parts(ids, paged, singles if pres is None else None)}
+                atomic_write_json(design.scene_json, data)
                 if options.check:
                     step(f"{name}: checking the pages against the original")
                     parts = [(pres, paged)] if pres is not None else [(p, pg) for (_r, p, _s), pg in singles]
@@ -362,6 +367,18 @@ def export_to_canva(project, version_ids: list[str], options: CanvaOptions, clie
                 report.failures.append((name, str(exc)))
     progress(1.0, report.summary())
     return report
+
+
+def _parts(ids: list[str], paged: PagedScene, singles) -> list[dict]:
+    """Which pages of the design belong to which proposal (and the y offset of that proposal in the design)."""
+    if singles is None:
+        return [{"version_id": ids[0], "first_page": 0, "pages": len(paged.pages), "offset": 0.0}]
+    out, first, offset = [], 0, 0.0
+    for ((record, _p, scene), pg) in singles:
+        out.append({"version_id": record.id, "first_page": first, "pages": len(pg.pages), "offset": offset})
+        first += len(pg.pages)
+        offset += scene.height
+    return out
 
 
 def _check(project, presentation, paged: PagedScene, options: CanvaOptions, pptx: Path) -> tuple[float | None, float | None]:

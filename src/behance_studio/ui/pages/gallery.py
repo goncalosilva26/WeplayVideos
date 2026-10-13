@@ -39,6 +39,7 @@ class ProposalCard(Card):
         lay.setContentsMargins(10, 10, 10, 12)
         lay.setSpacing(7)
         self.strip = StripPreview(284, 330)
+        self.strip.placeholder = "Preparing preview…"
         self.strip.set_path(strip_path if strip_path.exists() else None)
         self.strip.setToolTip("Hover to scroll through the whole presentation · double-click to open")
         lay.addWidget(self.strip)
@@ -176,6 +177,47 @@ class GalleryPage(QWidget):
             card.customContextMenuRequested.connect(lambda pos, rec=v, c=card: self._menu(rec, c.mapToGlobal(pos)))
             self.flow.addWidget(card)
         self._update_actions()
+        self._render_missing_previews([v for v in versions if not manager.strip_path(v).exists()])
+
+    def _render_missing_previews(self, records) -> None:
+        """Proposals without a preview (generated without one, or the render failed)
+        get it in the background; the cards update when it is ready."""
+        project = self.state.project
+        attempted = self.__dict__.setdefault("_preview_attempted", set())
+        records = [r for r in records if r.id not in attempted]  # one attempt per session: a failure never loops
+        if not records or project is None or getattr(self, "_previewing", False):
+            return
+        attempted.update(r.id for r in records[:12])
+        from behance_studio.render.browser import browser_available
+
+        browser = self.state.settings.browser_path
+        if not browser_available(browser):
+            return
+        manager = self.state.versions
+        self._previewing = True
+
+        def work(token, progress):
+            from behance_studio.render.previews import render_previews
+
+            jobs = []
+            for rec in records[:12]:
+                if token.cancelled:
+                    break
+                try:
+                    jobs.append((manager.load(rec.id).presentation, manager.thumb_path(rec), manager.strip_path(rec)))
+                except Exception:  # noqa: BLE001 - a damaged proposal keeps its placeholder
+                    continue
+            if jobs:
+                render_previews(project, jobs, browser_path=browser)
+            return len(jobs)
+
+        def done(count) -> None:
+            self._previewing = False
+            if count and self.state.project is project:
+                self.refresh()
+
+        self.state.runner.start(work, "previews", on_done=done, on_error=lambda _e: setattr(self, "_previewing", False),
+                                on_cancel=lambda: setattr(self, "_previewing", False))
 
     def _toggle(self, vid: str, on: bool) -> None:
         if on:

@@ -61,6 +61,8 @@ set PYTHONPATH=%CD%\src
 .venv\Scripts\python -m behance_studio create "My Project" --assets "D:\Delivery\My Project"
 .venv\Scripts\python -m behance_studio generate "D:\...\My Project"
 .venv\Scripts\python -m behance_studio export "D:\...\My Project" --formats pdf,png,zip
+.venv\Scripts\python -m behance_studio real-test "D:\Delivery\My Project"
+.venv\Scripts\python -m behance_studio canva-verify "design.pptx" "download-from-canva.zip"
 ```
 
 Run `python -m behance_studio --help` for every command and option.
@@ -78,6 +80,7 @@ On Linux/macOS (development only): `./run.sh setup`, `./run.sh test`, `./run.sh`
 * [User guide](docs/USER_GUIDE.md) — workflow, brief and script formats, editing, exporting
 * [Windows distribution](docs/WINDOWS_INSTALLER.md) — `build_windows.bat`: portable folder + Inno Setup installer
 * [Free local AI with Ollama](docs/LOCAL_AI.md) — model choice for an RTX 3060 12 GB, Windows setup, `LocalAI_Check.bat`
+* [Testes reais (PT)](docs/TESTES_REAIS.md) — `Teste_Real.bat` with your own projects, `LocalAI_Check.bat`, `Verificar_Canva.bat` against your real Canva account
 * [Export to Canva](docs/CANVA.md) — how proposals become editable Canva designs, connecting a Canva account, verified fidelity and limitations
 * [AI providers](docs/AI_PROVIDERS.md) — optional OpenAI-compatible, Anthropic and local models; AI director and critique; privacy, costs and limits
 * [Architecture](docs/ARCHITECTURE.md) — how the pipeline, layout engine and renderer work

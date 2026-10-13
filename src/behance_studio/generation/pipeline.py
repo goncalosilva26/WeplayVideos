@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import random
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -315,7 +316,17 @@ def generate(
     # 2 ── analyze
     tracker.start("analyze", STAGE_LABELS["analyze"])
     assets = project.list_assets()
-    stale = [a for a in assets if a.is_visual and (a.analysis or {}).get("version") != ANALYSIS_VERSION]
+    # Projects imported before folder paths were recorded (or folders dropped one
+    # by one) get their folders back from the original file paths, so the
+    # designer's sections and the folder hint for the type guess apply to them too.
+    from behance_studio.assets.folders import backfill_source_folders
+
+    recovered = backfill_source_folders([a for a in assets if a.is_visual])
+    if recovered:
+        project.save_assets(recovered)
+        result.notes.append(f"Folder organisation recovered from the original file paths for {len(recovered)} image(s).")
+    recovered_ids = {a.id for a in recovered}
+    stale = [a for a in assets if a.is_visual and ((a.analysis or {}).get("version") != ANALYSIS_VERSION or a.id in recovered_ids)]
     if stale:
         analyze_assets(project, stale, token=token, progress=lambda f, m: tracker.update(f * (0.7 if ai_service else 1.0), m), workers=request.workers)
     project.refresh_missing()
@@ -370,6 +381,10 @@ def generate(
     specs = proposal_specs(request, directives.families_allowed)
     plans = []
     concepts = [s.family for s in specs]
+    from behance_studio.director.rhythm import asset_groups, vary_rhythm
+
+    group_of = asset_groups(ctx)
+    used_modules: Counter = Counter()  # compositions of the proposals planned so far (variety between proposals)
     for i, spec in enumerate(specs):
         token.raise_if_cancelled()
         try:
@@ -387,6 +402,12 @@ def generate(
             # Every image stays in its intended section (its folder's, when organised).
             fit = enforce_section_fit(plan, {a.id: a for a in assets}, assignment)
             plan.notes.extend(fit.notes({a.id: a.filename for a in assets}))
+            # No composition repeated back to back (within each section's own images).
+            if vary_rhythm(plan, group_of, spec.family, used_modules, {a.id: a.aspect for a in assets}):
+                from behance_studio.planning.planner import assign_stable_ids
+
+                assign_stable_ids(plan)
+            used_modules.update(s.meta["module"] for s in plan.sections if s.meta.get("module"))
             plan.asset_sections = assignment.to_plan()
             if ai_service is not None and request.use_ai:
                 try:

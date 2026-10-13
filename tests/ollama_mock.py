@@ -39,6 +39,8 @@ class MockOllama:
         self.version = "0.12.9"
         self.requests: list[dict] = []
         self.overrides: dict[str, tuple[str, str]] = {}  # file name -> (kind, presentation)
+        self.boxes: dict[str, list[float]] = {}  # file name -> subject box (0-1000)
+        self.cover_scores: dict[str, float] = {}  # file name -> cover score
         self.pull_error = ""
         server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self.server = server
@@ -62,7 +64,8 @@ class MockOllama:
         if kind is None:
             kind, presentation = next(((k, p) for word, k, p in PURPOSES if word in name), ("photo", "photograph"))
         return {"kind": kind, "presentation": presentation, "shows_logo": kind in ("logo", "packaging"), "text_visible": kind in ("poster", "social"),
-                "confidence": 0.9, "description": f"a {kind.replace('_', ' ')}", "tags": [kind]}
+                "confidence": 0.9, "description": f"a {kind.replace('_', ' ')}", "tags": [kind],
+                "subject_box": self.boxes.get(name, [150, 150, 850, 850]), "cover_score": self.cover_scores.get(name, 0.5)}
 
     def answer(self, body: dict) -> str:
         text = _texts(body)

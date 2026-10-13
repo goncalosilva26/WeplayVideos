@@ -210,7 +210,7 @@ def _asset_line(handle: str, group: str, a: AssetRecord, section: str = "") -> s
         bits.insert(1, f"SECTION “{section}”")
     if info.get("background") == "transparent":
         bits.append("transparent")
-    if info.get("text_fraction", 0) >= 0.03:
+    if info.get("text_fraction", 0) >= 0.03 or (info.get("ai") or {}).get("text_visible"):
         bits.append("contains text")
     if a.media_type == "video":
         bits.append("video")

@@ -1,6 +1,6 @@
 # Development status
 
-_Last updated: 2026-10-12 · version 2.0.0.dev1 (Export to Canva 2.3) · branch `claude/behance-studio-windows-app-o0z32d`_
+_Last updated: 2026-10-13 · version 2.0.0.dev1 (Quality phase 1 — 2.4) · branch `claude/behance-studio-windows-app-o0z32d`_
 
 This file is the persistent record of what exists, what was verified and what
 is still open. Update it at every milestone.
@@ -30,6 +30,54 @@ and `docs/samples/v2/` (the five 2.0 concepts, same synthetic fixture).
 | Generative mockups | **Planned (M4)** — CSS device/frame mockups are done | — |
 | Visual editor overlay on the spec | **Planned (M3)** — inspector editing works on 2.0 proposals | — |
 | Windows distribution: PyInstaller one-folder (`BehanceStudio.exe` + `BehanceStudio-cli.exe`, unused Qt parts filtered), Inno Setup per-user installer (uninstall keeps user data), `build_windows.bat` | **Done — verified on Linux only** (frozen build: doctor, demo generation with rendering, PDF/PNG/HTML export, GUI start); Windows build, installer compilation and code signing not verified | `tests/test_packaging.py`, manual frozen-build run |
+
+### Quality and reliability, phase 1 — 2.4
+
+Goal: a folder of project files in, several professional Behance
+presentations out, with no manual set-up. Fixed only what could be checked
+here; everything that needs the user's PC is prepared as a one-step test
+([docs/TESTES_REAIS.md](docs/TESTES_REAIS.md), in Portuguese).
+
+**Images in the wrong section although the folders are organised — root
+causes found** (reproduced with a Portuguese fixture,
+`tests/organized_fixture.py::build_organized_pt`: `1. Logos/PNG|Versões`,
+`Cores`, `Tipografia`, `Padrão`, `Embalagens/Copos`, `Cartazes`, `Outdoors`,
+`Redes Sociais`, `Fotografia`):
+
+1. folder names that real deliveries use were not recognised (plurals,
+   Portuguese: `Logos`, `Logotipos`, `Padrão`, `Ícones`, `Rótulos`,
+   `Cartões de visita`, `Estacionário`, `Ementa`, `Manual de marca`,
+   `Outdoors`, `Vídeos`…) → they became untyped custom sections and the
+   type-driven checks treated their images as misplaced;
+2. a numbered section with sub-folders (`1. Logos/Versões`) was split into a
+   separate "Versões" section;
+3. projects created before folder paths were stored, or files dropped one
+   by one, had no folder at all → images were grouped by guessed type;
+4. images the script did not mention were grouped by type, not by folder.
+
+| Area | Status | Verified by |
+| --- | --- | --- |
+| Folder names in PT/EN, singular/plural; numbered sections keep their sub-folders; folder paths recovered from the files' original locations (Windows and POSIX paths) for older projects | **Done** | `tests/test_quality.py` (17 names, numbered sub-folders, PT project across 11 families: 0 mixed sections, recovery) |
+| Script extras grouped by folder | **Done** | `test_script_extras_follow_the_folders` |
+| Vision model drives the layouts: new answer fields `subject_box` (crop focus, subject never cut) and `cover_score` (blended 40 % into image strength → cover, lead images, order); nature applied even when the folder fixes the type; "contains text" protects crops; diagnostics list what the AI influenced per image and in total; prompt version 4 (one re-analysis) | **Done — mock-tested** | `test_vision_answers_steer_crops_ranking_and_cover` (mock Ollama: the model's favourite image becomes a cover, a subject at the far left stays whole in a wide crop) |
+| Rhythm pass after planning (all concepts, offline and AI director): consecutive identical compositions combined, paired or replaced, following each concept's taste and avoiding what the other proposals already use; alignment/variant changes when nothing else fits; never moves images between sections, never touches script/locked sections | **Done** | `test_no_composition_repeats_back_to_back` (organised + flat, ≥ 7 distinct compositions per proposal) |
+| Interface: proposal cards without preview render them in the background (once per session); transparent logos get a contrasting ground and a margin; file grid shows a short path with the full path in the tooltip; viewer lists a section split into parts once (`↳ part 2`); dashboard counts complete presentations; a tip when a project has no section folders | **Done** | offscreen screenshots reviewed; `test_transparent_thumbnails_get_a_contrasting_ground` |
+| `real-test <folder>` / `Teste_Real.bat`: test project, five concepts (with Qwen3-VL when Ollama is ready), contact sheets, PDF, Canva files, measurements (misplaced images, repeats, compositions, quality issues, times), Portuguese report and a ZIP without the original files | **Done** (a failing stage is reported, the rest still runs) | `tests/test_realworld_kit.py::test_real_test_writes_a_report_and_a_zip_without_the_originals`, `test_real_test_uses_the_local_vision_model_when_ollama_is_ready` (Ollama stand-in) |
+| `canva-verify` / `Verificar_Canva.bat`: compares the pages Canva renders (PNG ZIP/folder or PDF downloaded from canva.com) with the original pages rebuilt from the project (`.canva.json` now records project, proposals and page ranges); per-page similarity, page count and proportion checks, side-by-side images | **Done — tool verified with a stand-in** (LibreOffice's rendering of the .pptx) | `test_canva_verify_compares_downloaded_pages_with_the_original` (good download ≥ 95 %; a lost page and a blank page are reported) |
+| **Real Qwen3-VL answers for subject box and cover score; the user's projects; Canva's own rendering; Windows** | **Not verified here** — see TESTES_REAIS.md | — |
+
+Measured on the fixtures (seed 7, the five concepts), before → after the rhythm pass:
+
+| Fixture | Back-to-back repeats per proposal | Distinct compositions | Pairwise layout distance (min / mean) |
+| --- | --- | --- | --- |
+| Organised (PT folders) | 6, 10, 2, 2, 2 → **0, 0, 0, 0, 0** | 8, 7, 8, 7, 10 → 9, 8, 8, 7, 11 | 0.56 / 0.62 → 0.53 / 0.59 |
+| Flat (no folders) | 3, 8, 2, 2, 4 → **0, 0, 0, 0, 0** | 12, 10, 10, 9, 12 → 12, 11, 11, 10, 13 | 0.60 / 0.66 → 0.61 / 0.66 |
+
+Disclosed trade-off: on the organised fixture, removing repeats inside each
+proposal makes the proposals slightly closer to each other (mean 0.62 →
+0.59; the first version of the pass brought Minimal and Bold to 0.47, which
+is why replacements now follow each concept's taste). All pairs stay well
+above 0.25 (the threshold for structurally different layouts).
 
 ### Free local AI (Ollama) — 2.1
 
